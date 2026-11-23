@@ -48,3 +48,7 @@ lean_exe spike where
 /-- Reads GID text files and writes them back, to check the two agree. -/
 lean_exe gid_round_trip where
   root := `Spike.RoundTrip
+
+/-- Prints GID text files as the editor would show them. -/
+lean_exe gid_show where
+  root := `Spike.ShowGid

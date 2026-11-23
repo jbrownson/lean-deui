@@ -1,4 +1,9 @@
 import Progred.Gid
 import Progred.Kinds
 import Progred.GidText
+import Progred.Builtin
+import Progred.Layout
+import Progred.Display
+import Progred.Model
+import Progred.Editing
 import Progred.Run
