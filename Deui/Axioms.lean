@@ -1,4 +1,5 @@
 import Deui.Column
+import Deui.App
 
 /-! Every law's axioms, checked by `lake build`: it fails on a `sorry` or a
 new axiom. -/
@@ -9,5 +10,14 @@ new axiom. -/
 /-- info: 'Deui.cached_ok' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.cached_ok
 
-/-- info: 'Deui.inc_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Deui.inc_ok
+/-- info: 'Deui.Column.inc_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Column.inc_ok
+
+/-- info: 'Deui.Lists.map_inc_ok' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Deui.Lists.map_inc_ok
+
+/-- info: 'Deui.App.play_shows' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.App.play_shows
+
+/-- info: 'Deui.App.turns_edits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.App.turns_edits

@@ -6,7 +6,9 @@ turns an edit to the rows into a few edits to the column's scene, without
 laying the column out again.
 -/
 
-namespace Deui
+namespace Deui.Column
+
+open Deui
 
 /-- A row: how tall it is, and what's in it, drawn from the row's top. -/
 structure Row where
@@ -15,7 +17,7 @@ structure Row where
 
 /-- Rows are replaced whole; the rows change as a list does. -/
 abbrev rowEdits : EditStructure := whole (none Row)
-abbrev rowsEdits : EditStructure := listEdits rowEdits
+abbrev rowsEdits : EditStructure := Lists.editStructure rowEdits
 
 /-- A row at `y`: its scene, in a group placed at the row's top. -/
 def placed (y : Int32) (s : Scene) : Scene := .group 0 y [s]
@@ -58,11 +60,11 @@ inserting the new one. Past the end, nothing. -/
 def replaceEdits (rows : List Row) (i : Nat) (r : Row) : List SceneEdit :=
   if i < rows.length then
     if height rows i = r.h then [.delete i, .insert i (placed (top rows i 0) r.s)]
-    else deleteEdits rows i ++ insertEdits (removeAt rows i) i r
+    else deleteEdits rows i ++ insertEdits (Lists.remove rows i) i r
   else []
 
 /-- The edits one edit to the rows makes to the column's scene. -/
-def edit (rows : List Row) : ListEdit rowEdits → List SceneEdit
+def edit (rows : List Row) : Lists.Edit.of rowEdits → List SceneEdit
   | .insert i r => insertEdits rows i r
   | .delete i => deleteEdits rows i
   | .update i (.replace r) => replaceEdits rows i r
@@ -93,8 +95,8 @@ theorem shift_place (rows : List Row) (y h : Int32) :
     simp only [place, shifted, ih, placed, Scene.translate, Int32.add_zero, add_right_comm]
 
 theorem insert_core (rows : List Row) (i : Nat) (y h : Int32) (s : Scene) :
-    shifted 0 h (insertAt (place rows y) i (placed (top rows i y) s)) (i + 1) =
-      place (insertAt rows i ⟨h, s⟩) y := by
+    shifted 0 h (Lists.insert (place rows y) i (placed (top rows i y) s)) (i + 1) =
+      place (Lists.insert rows i ⟨h, s⟩) y := by
   induction rows generalizing i y with
   | nil => rfl
   | cons r t ih =>
@@ -102,35 +104,35 @@ theorem insert_core (rows : List Row) (i : Nat) (y h : Int32) (s : Scene) :
     | zero =>
       show placed y s :: shifted 0 h (place (r :: t) y) 0 = place (⟨h, s⟩ :: r :: t) y
       rw [shift_place]; rfl
-    | succ i => simp only [place, top, insertAt, shifted, ih]
+    | succ i => simp only [place, top, Lists.insert, shifted, ih]
 
 theorem delete_core (rows : List Row) (i : Nat) (y : Int32) :
-    shifted 0 (0 - height rows i) (removeAt (place rows y) i) i = place (removeAt rows i) y := by
+    shifted 0 (0 - height rows i) (Lists.remove (place rows y) i) i = place (Lists.remove rows i) y := by
   induction rows generalizing i y with
   | nil => rfl
   | cons r t ih =>
     cases i with
-    | zero => simp only [place, height, removeAt, shift_place, add_sub_cancel']
-    | succ i => simp only [place, height, removeAt, shifted, ih]
+    | zero => simp only [place, height, Lists.remove, shift_place, add_sub_cancel']
+    | succ i => simp only [place, height, Lists.remove, shifted, ih]
 
 theorem swap_core (rows : List Row) (i : Nat) (y : Int32) (r : Row)
     (hi : i < rows.length) (hh : height rows i = r.h) :
-    insertAt (removeAt (place rows y) i) i (placed (top rows i y) r.s) =
-      place (rows.modify i fun _ => r) y := by
+    Lists.insert (Lists.remove (place rows y) i) i (placed (top rows i y) r.s) =
+      place (Lists.update rowEdits rows i (.replace r)) y := by
   induction rows generalizing i y with
   | nil => simp at hi
   | cons r0 t ih =>
     cases i with
     | zero =>
-      cases t <;> simp_all [place, top, height, removeAt, insertAt, List.modify]
+      simp only [height] at hh
+      cases t <;> simp_all [place, top, Lists.remove, Lists.insert, Lists.update, whole.apply]
     | succ i =>
       simp only [List.length_cons] at hi
-      simp only [place, top, height, removeAt, insertAt] at hh ⊢
+      simp only [place, top, height, Lists.remove, Lists.insert, Lists.update] at hh ⊢
       rw [ih i (y + r0.h) (by omega) hh]
-      simp [List.modify, place]
 
-theorem modify_replace (rows : List Row) (i : Nat) (r : Row) (hi : i < rows.length) :
-    rows.modify i (fun _ => r) = insertAt (removeAt rows i) i r := by
+theorem update_replace (rows : List Row) (i : Nat) (r : Row) (hi : i < rows.length) :
+    Lists.update rowEdits rows i (.replace r) = Lists.insert (Lists.remove rows i) i r := by
   induction rows generalizing i with
   | nil => simp at hi
   | cons r0 t ih =>
@@ -138,24 +140,27 @@ theorem modify_replace (rows : List Row) (i : Nat) (r : Row) (hi : i < rows.leng
     | zero => cases t <;> rfl
     | succ i =>
       simp only [List.length_cons] at hi
-      simp [List.modify, removeAt, insertAt, ← ih i (by omega)]
+      simp only [Lists.update, Lists.remove, Lists.insert, ih i (by omega)]
+      rfl
 
-theorem modify_past (rows : List Row) (i : Nat) (f : Row → Row) (hi : ¬ i < rows.length) :
-    rows.modify i f = rows :=
-  List.modify_eq_self (by omega)
+/-- Past the end, replacing a row leaves the rows as they are. -/
+theorem update_past (rows : List Row) (i : Nat) (r : Row) (hi : ¬ i < rows.length) :
+    Lists.update rowEdits rows i (.replace r) = rows :=
+  Lists.update_past (ca := rowEdits) rows i (Nat.le_of_not_lt hi) (.replace r)
 
 theorem insert_ok (rows : List Row) (i : Nat) (r : Row) :
-    run sceneEdits (insertEdits rows i r) (view rows) = view (insertAt rows i r) := by
+    run sceneEdits (insertEdits rows i r) (view rows) = view (Lists.insert rows i r) := by
   simp only [insertEdits, run, view, sceneEdits, SceneEdit.apply]
   rw [insert_core]
 
 theorem delete_ok (rows : List Row) (i : Nat) :
-    run sceneEdits (deleteEdits rows i) (view rows) = view (removeAt rows i) := by
+    run sceneEdits (deleteEdits rows i) (view rows) = view (Lists.remove rows i) := by
   simp only [deleteEdits, run, view, sceneEdits, SceneEdit.apply]
   rw [delete_core]
 
 theorem replace_ok (rows : List Row) (i : Nat) (r : Row) :
-    run sceneEdits (replaceEdits rows i r) (view rows) = view (rows.modify i fun _ => r) := by
+    run sceneEdits (replaceEdits rows i r) (view rows) =
+      view (Lists.update rowEdits rows i (.replace r)) := by
   unfold replaceEdits
   split
   · rename_i hi
@@ -163,14 +168,14 @@ theorem replace_ok (rows : List Row) (i : Nat) (r : Row) :
     · rename_i hh
       simp only [run, view, sceneEdits, SceneEdit.apply]
       rw [swap_core rows i 0 r hi hh]
-    · rw [run_append, delete_ok, insert_ok, modify_replace rows i r hi]
+    · rw [run_append, delete_ok, insert_ok, update_replace rows i r hi]
   · rename_i hi
-    rw [modify_past rows i _ hi]
+    rw [update_past rows i r hi]
     rfl
 
 /-- One edit's edits give the column of the edited rows. -/
-theorem edit_ok (rows : List Row) (e : ListEdit rowEdits) :
-    run sceneEdits (edit rows e) (view rows) = view (e.apply rows) := by
+theorem edit_ok (rows : List Row) (e : Lists.Edit.of rowEdits) :
+    run sceneEdits (edit rows e) (view rows) = view (Lists.edit rowEdits e rows) := by
   match e with
   | .insert i r => exact insert_ok rows i r
   | .delete i => exact delete_ok rows i
@@ -182,4 +187,4 @@ theorem one_ok : one.ok := edit_ok
 /-- And for runs of edits. -/
 theorem inc_ok : inc.ok := lift_ok one one_ok
 
-end Deui
+end Deui.Column
