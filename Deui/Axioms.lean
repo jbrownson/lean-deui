@@ -72,5 +72,5 @@ new axiom. -/
 /-- info: 'Deui.App.applied_shows' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.App.applied_shows
 
-/-- info: 'Deui.Lists.sifted_ok' depends on axioms: [propext] -/
+/-- info: 'Deui.Lists.sifted_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Lists.sifted_ok
