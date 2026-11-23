@@ -14,7 +14,7 @@ inductive Face where
   | ink | name | label | string | number | dim | delimiter | result | error
   /-- The caret of a line being typed in: no text, drawn as a bar. -/
   | caret
-  deriving BEq, Inhabited, Repr
+  deriving DecidableEq, Inhabited, Repr
 
 structure Span where
   col : Nat
@@ -22,7 +22,7 @@ structure Span where
   face : Face
   /-- What the span shows: an occurrence's number, 0 for none. -/
   mark : Nat
-  deriving Inhabited, Repr
+  deriving DecidableEq, Inhabited, Repr
 
 def Span.stop (s : Span) : Nat := s.col + s.text.length
 
@@ -38,6 +38,9 @@ inductive Doc where
   /-- One under another. -/
   | col (parts : List Doc)
   | indent (n : Nat) (d : Doc)
+  /-- Its later lines start `n` columns further in; its first starts where
+  it would. -/
+  | hang (n : Nat) (d : Doc)
   /-- `flat` if it's one line and fits the ribbon, else `stacked`. -/
   | alt (flat stacked : Doc)
   /-- Everything inside shows occurrence `id`, unless marked deeper. -/
@@ -55,6 +58,7 @@ def width? : Doc → Option Nat
   | .col [d] => width? d
   | .col _ => none
   | .indent n d => (width? d).map (n + ·)
+  | .hang _ d => width? d
   | .alt flat _ => width? flat
   | .mark _ d => width? d
 
@@ -76,6 +80,7 @@ partial def lines (ribbon : Nat) (first col : Nat) (mark : Nat) : Doc → Array 
   | .col [] => #[#[]]
   | .col (d :: rest) => rest.foldl (fun acc p => acc ++ lines ribbon col col mark p) (lines ribbon first col mark d)
   | .indent n d => lines ribbon (first + n) (col + n) mark d
+  | .hang n d => lines ribbon first (col + n) mark d
   | .alt flat stacked =>
     match width? flat with
     | some w => if first + w ≤ ribbon then lines ribbon first col mark flat else lines ribbon first col mark stacked

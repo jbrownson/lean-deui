@@ -9,15 +9,21 @@ abbrev M := App.Model Editor.app
 
 def show_ (m : M) : IO Unit := do
   let model := m.state
-  let (lines, occs) := model.laid
-  for l in lines do
-    IO.println ("  | " ++ l.plain)
-    let failed := l.toList.filter fun s => s.mark > 0 && ((occs[s.mark - 1]?).map (·.failed)).getD false
-    if !failed.isEmpty then IO.println ("  ! " ++ String.join (failed.map (·.text)))
+  -- The layout the view keeps, which is what the editor reads.
+  let l : Model.Layout := ⟨(Editor.laidOf m.shown.2).2⟩
+  for block in l.blocks do
+    for line in block.lines do
+      IO.println ("  | " ++ line.plain)
+      let failed := line.toList.filter fun s => s.mark > 0 && ((block.occs[s.mark - 1]?).map (·.failed)).getD false
+      if !failed.isEmpty then IO.println ("  ! " ++ String.join (failed.map (·.text)))
+  -- What's kept is what working it all out again gives: the laws say so,
+  -- and this looks.
+  if l.plain != (Model.Layout.of model).plain then IO.println "  !! the layout kept isn't the model's layout"
+  if !(m.shown.1 == (Editor.view.f model).1) then IO.println "  !! the scene kept isn't the model's view"
   match model.selection with
   | some sel =>
-    let stops := Model.stops lines occs
-    let at_ := (model.here occs stops).map fun i => s!"line {stops[i]!.line} col {stops[i]!.col}"
+    let at_ := (l.here model).map fun (b, i) =>
+      s!"line {l.lineOf b + l.blocks[b]!.stops[i]!.line} col {l.blocks[b]!.stops[i]!.col}"
     let typing := sel.editing.map fun e => s!" typing \"{e.text}\"{if e.picker then " (query)" else ""}"
     IO.println s!"  selection: {repr sel.stage} at {at_.getD "?"}{typing.getD ""}"
     let offers := Model.offers model
@@ -70,7 +76,7 @@ unsafe def main (args : List String) : IO Unit := do
     for step in args do
       for e in script step do
         m := App.step Editor.app m e
-        m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+        m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
       IO.println s!"-- {step}"
       show_ m
     return
@@ -97,13 +103,13 @@ unsafe def main (args : List String) : IO Unit := do
   for (name, es) in steps do
     for e in es do
       m := App.step Editor.app m e
-      m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+      m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
     IO.println s!"-- {name}"
     show_ m
   clipboard.set "from elsewhere"
   for e in enter ++ key 'v'.toNat.toUInt32 2 do
     m := App.step Editor.app m e
-    m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+    m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
   IO.println "-- text from elsewhere pasted as a new entry"
   show_ m
   IO.println "-- as a file"

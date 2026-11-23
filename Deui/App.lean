@@ -42,8 +42,14 @@ end Mods
 
 structure App (cs : EditStructure) where
   view : Cached (runs cs) (runs sceneEdits)
-  /-- The edits an event makes to the state, given the scene on screen. -/
-  respond : cs.Value → Scene → Event → List cs.Edit
+  /-- The edits an event makes to the state, given the scene on screen and
+  what the view keeps: what it worked out for this state, there to be read
+  rather than worked out again. -/
+  respond : cs.Value → Scene → view.Cache → Event → List cs.Edit
+  /-- Edits that follow an event's, from the state they left and what the
+  view keeps for it: what depends on the view of the new state, like
+  scrolling to what was just selected. -/
+  settle : cs.Value → view.Cache → List cs.Edit := fun _ _ => []
 
 /-- What an app holds between events: its state, and what's shown: the
 scene on screen, with what the view keeps. -/
@@ -62,9 +68,10 @@ def coordinate (v : Float) : Int32 := (max v 0).toUInt32.toInt32
 went down, what was typed, or how far the wheel turned. A button pressed
 down goes through what it hit in the scene on screen; other events make no
 edits. -/
-def handlers {cs : EditStructure} (press : cs.Value → Hit → List cs.Edit)
+def handlers {cs : EditStructure} {Kept : Type} (press : cs.Value → Hit → List cs.Edit)
     (key : cs.Value → UInt32 → List cs.Edit) (text : cs.Value → String → List cs.Edit)
-    (scroll : cs.Value → Float → List cs.Edit) (state : cs.Value) (scene : Scene) : Event → List cs.Edit
+    (scroll : cs.Value → Float → List cs.Edit) (state : cs.Value) (scene : Scene) (_ : Kept) :
+    Event → List cs.Edit
   | .press x y _ true =>
     match scene.hit (coordinate x) (coordinate y) with
     | some h => press state h
@@ -77,16 +84,26 @@ def handlers {cs : EditStructure} (press : cs.Value → Hit → List cs.Edit)
 /-- The model at launch: the state, and its view. -/
 def start (state : cs.Value) : Model app := ⟨state, app.view.f state⟩
 
-/-- The model after a run of edits to the state, and the scene edits the
+/-- The model after a run of edits to the state (no edits leave it as it
+is, and ask nothing of the view), and the scene edits the
 view's derivative made of them, from what the view kept. -/
-def edited (m : Model app) (es : List cs.Edit) : Model app × List SceneEdit :=
-  let r := app.view.df m.shown.2 es
-  (⟨run cs es m.state, (run sceneEdits r.1 m.shown.1, r.2)⟩, r.1)
+def edited (m : Model app) : List cs.Edit → Model app × List SceneEdit
+  | [] => (m, [])
+  | es =>
+    let r := app.view.df m.shown.2 es
+    (⟨run cs es m.state, (run sceneEdits r.1 m.shown.1, r.2)⟩, r.1)
 
-/-- An event's turn: the model after the edits the app answers it with, and
-the scene edits they made. -/
+/-- Edits applied, then the edits that settle them: the model after both,
+and the scene edits they made. -/
+def applied (m : Model app) (es : List cs.Edit) : Model app × List SceneEdit :=
+  let t := edited app m es
+  let u := edited app t.1 (app.settle t.1.state t.1.shown.2)
+  (u.1, t.2 ++ u.2)
+
+/-- An event's turn: the model after the edits the app answers it with,
+settled, and the scene edits they made. -/
 def turn (m : Model app) (e : Event) : Model app × List SceneEdit :=
-  edited app m (app.respond m.state m.scene e)
+  applied app m (app.respond m.state m.scene m.shown.2 e)
 
 /-- The model after an event. -/
 def step (m : Model app) (e : Event) : Model app := (turn app m e).1
@@ -116,19 +133,34 @@ theorem start_shows (state : cs.Value) : shows app (start app state) := rfl
 on screen the view of the state, without running the view again. -/
 theorem edited_shows (ok : app.view.ok) (m : Model app) (es : List cs.Edit) (h : shows app m) :
     shows app (edited app m es).1 := by
-  unfold shows at h ⊢
-  simp only [edited]
-  rw [← ok, ← h]
+  cases es with
+  | nil => exact h
+  | cons e t =>
+    unfold shows at h ⊢
+    simp only [edited]
+    rw [← ok, ← h]
 
 /-- And the scene edits they made take the scene on screen before them to
 the one after. -/
 theorem edited_edits (m : Model app) (es : List cs.Edit) :
-    (edited app m es).1.scene = run sceneEdits (edited app m es).2 m.scene := rfl
+    (edited app m es).1.scene = run sceneEdits (edited app m es).2 m.scene := by
+  cases es <;> rfl
 
 /-- So an event keeps the scene on screen the view of the state. -/
+theorem applied_shows (ok : app.view.ok) (m : Model app) (es : List cs.Edit) (h : shows app m) :
+    shows app (applied app m es).1 :=
+  edited_shows app ok _ _ (edited_shows app ok m _ h)
+
+/-- Applied edits take the scene on screen before them to the one after. -/
+theorem applied_edits (m : Model app) (es : List cs.Edit) :
+    (applied app m es).1.scene = run sceneEdits (applied app m es).2 m.scene := by
+  simp only [applied]
+  rw [run_append, ← edited_edits app m es]
+  exact edited_edits app _ _
+
 theorem step_shows (ok : app.view.ok) (m : Model app) (e : Event) (h : shows app m) :
     shows app (step app m e) :=
-  edited_shows app ok m _ h
+  applied_shows app ok m _ h
 
 /-- And so does any run of events. -/
 theorem play_shows (ok : app.view.ok) (es : List Event) :
@@ -143,6 +175,11 @@ theorem turns_model (es : List Event) : ∀ m : Model app, (turns app m es).1 = 
   | nil => exact fun _ => rfl
   | cons e es ih => exact fun m => ih _
 
+/-- A turn's edits take the scene on screen before it to the one after. -/
+theorem turn_edits (m : Model app) (e : Event) :
+    (turn app m e).1.scene = run sceneEdits (turn app m e).2 m.scene :=
+  applied_edits app m _
+
 /-- And its edits take the scene on screen before the events to the one
 after them, so a copy kept by those edits stays the scene on screen. -/
 theorem turns_edits (es : List Event) :
@@ -152,7 +189,6 @@ theorem turns_edits (es : List Event) :
   | cons e es ih =>
     intro m
     simp only [turns]
-    rw [run_append, ih]
-    rfl
+    rw [run_append, ih, turn_edits]
 
 end Deui.App

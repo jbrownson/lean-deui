@@ -6,6 +6,10 @@ import Deui.Drawing
 import Deui.Scroll
 import Deui.Drawn
 import Deui.Redraw
+import Deui.Diff
+import Deui.Combine
+import Deui.Flatten
+import Deui.Anchored
 import Deui.App
 import Deui.Screen
 import Deui.Axioms

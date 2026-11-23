@@ -1,3 +1,4 @@
+import Std.Data.TreeSet
 import Progred.Builtin
 import Progred.GidText
 import Progred.Layout
@@ -17,7 +18,7 @@ namespace Progred
 none, or a new field's label, at the record that will hold it. -/
 inductive Stage where
   | edge | pending | label
-  deriving BEq, Inhabited, Repr
+  deriving DecidableEq, Inhabited, Repr
 
 /-- Text being typed at the selection: a line of the value's own (text, a
 number), or a query a picker answers. -/
@@ -26,13 +27,13 @@ structure Editing where
   caret : Nat
   picker : Bool
   choice : Nat := 0
-  deriving BEq, Inhabited
+  deriving DecidableEq, Inhabited
 
 structure Selection where
   path : Path
   stage : Stage := .edge
   editing : Option Editing := none
-  deriving Inhabited
+  deriving DecidableEq, Inhabited
 
 inductive OccKind where
   /-- A value, where it is drawn. -/
@@ -48,21 +49,23 @@ inductive OccKind where
   | label
   /-- A result: computed, not stored. -/
   | computed
-  deriving BEq, Inhabited, Repr
+  deriving DecidableEq, Inhabited, Repr
 
 structure Occ where
   path : Path
   kind : OccKind
   /-- Whether an evaluation's error is about this value. -/
   failed : Bool := false
-  deriving Inhabited
+  /-- The cell it is: a value that's a cell, or a label. -/
+  cell : Option CellId := none
+  deriving DecidableEq, Inhabited
 
 /-- What an evaluation gave: a value and its type, or what went wrong, and
 the value it's about, as a path from the expression, if it's in it. -/
 inductive Outcome where
   | value (shown type : String)
   | failed (message : String) (at_ : Option Path := none)
-  deriving Inhabited, BEq
+  deriving Inhabited, DecidableEq
 
 /-- What the projection is of, besides the document. -/
 structure Shown where
@@ -81,12 +84,15 @@ errors are about, noted before what's there is drawn. -/
 structure Drawn where
   occs : Array Occ := #[]
   errors : List Path := []
+  /-- Whether the value about to be drawn is a field of a record with no
+  kind, where a cell opens. -/
+  inPlain : Bool := false
 
 abbrev M := StateM Drawn
 
 /-- A doc, marked as an occurrence. -/
-def occ (path : Path) (kind : OccKind) (d : Doc) : M Doc := do
-  modify fun st => { st with occs := st.occs.push ⟨path, kind, kind == .value && st.errors.contains path⟩ }
+def occ (path : Path) (kind : OccKind) (d : Doc) (cell : Option CellId := none) : M Doc := do
+  modify fun st => { st with occs := st.occs.push ⟨path, kind, kind == .value && st.errors.contains path, cell⟩ }
   return .mark (← get).occs.size d
 
 def t (s : String) (face : Face := .ink) : Doc := .text s face
@@ -125,7 +131,7 @@ when it has a definition of the document's that's more than a name, isn't
 inside another cell's definition, and is the root, a list's element, an
 evaluation's expression, or a field of a record with no kind. Elsewhere, as
 a call's function or argument or a kind, it shows as its name. -/
-def isOpen (path : Path) (c : CellId) : Bool :=
+def isOpen (path : Path) (c : CellId) (plain : Bool) : Bool :=
   match s.folds.find? (·.1 == path) with
   | some (_, closed) => !closed && (s.doc.lookup? s.library c).isSome
   | none =>
@@ -136,9 +142,7 @@ def isOpen (path : Path) (c : CellId) : Bool :=
     more && !(path.contains .follow) &&
       match path.getLast? with
       | none | some (.element _) => true
-      | some (.key l) =>
-        l == Kinds.expression ||
-          (l != Kinds.isa && ((s.doc.find? s.library path.dropLast).bind (·.kind?)).isNone)
+      | some (.key l) => l == Kinds.expression || (l != Kinds.isa && plain)
       | some .follow => false
 
 /-- A record's fields in the order raw shows them: named labels by name,
@@ -175,19 +179,24 @@ def brief (message : String) : String :=
 mutual
 
 /-- A value at a path, or the hole where there is none. -/
-partial def value (path : Path) : Option Value → M Doc
+partial def value (path : Path) (v? : Option Value) : M Doc := do
+  let plain ← modifyGet fun st => (st.inPlain, { st with inPlain := false })
+  match v? with
   | none => hole s path
   | some v =>
+    let cell := match v with
+      | .cell c => some c
+      | _ => none
     -- A picker over a value shows its query in the value's place.
     match editingAt s path .edge with
     | some e =>
-      if e.picker then occ path .value (.row [typing e .ink])
-      else do
+      if e.picker then occ path .value (.row [typing e .ink]) cell
+      else
         let inner ← line path v (some e)
-        occ path .value inner
-    | none => do
-      let inner ← drawn path v
-      occ path .value inner
+        occ path .value inner cell
+    | none =>
+      let inner ← drawn path v plain
+      occ path .value inner cell
 
 /-- A value drawn as a line, being typed in or not: text in quotes, a
 number as its digits. -/
@@ -206,9 +215,9 @@ partial def line (_path : Path) (v : Value) (e : Option Editing) : M Doc := do
       | some x => return .row [content .number (number x), dim "f64"]
       | none => return content .ink ""
 
-partial def drawn (path : Path) (v : Value) : M Doc := do
+partial def drawn (path : Path) (v : Value) (plain : Bool) : M Doc := do
   match v with
-  | .cell c => cell path c
+  | .cell c => cell path c plain
   | .blob b => return .text (GidText.hex b) .number
   | .list items => list path items
   | .record fields =>
@@ -230,8 +239,8 @@ partial def drawn (path : Path) (v : Value) : M Doc := do
 
 /-- A cell: open, its definition in parentheses; closed, its name, or its
 kind and short id. -/
-partial def cell (path : Path) (c : CellId) : M Doc := do
-  if isOpen s path c then
+partial def cell (path : Path) (c : CellId) (plain : Bool) : M Doc := do
+  if isOpen s path c plain then
     let inner ← value (path ++ [.follow]) (s.doc.lookup? s.library c)
     return .row [delim "(", inner, delim ")"]
   else
@@ -286,9 +295,10 @@ partial def list (path : Path) (items : List (Position × Value)) : M Doc := do
   return container "[" "]" parts parts
 
 /-- A field: its label, then its value beside it, or below it indented. -/
-partial def field (path : Path) (label : CellId) (v : Option Value) : M Doc := do
+partial def field (path : Path) (label : CellId) (v : Option Value) (plain : Bool := false) : M Doc := do
   let at_ := path ++ [.key label]
-  let name ← occ at_ .label (t (s.doc.shown s.library label) .label)
+  let name ← occ at_ .label (t (s.doc.shown s.library label) .label) (some label)
+  if plain then modify fun st => { st with inPlain := true }
   let inner ← value at_ v
   return .row [name, dim ": ", inner]
 
@@ -302,7 +312,7 @@ partial def newLabel (path : Path) : M (List Doc) := do
 /-- A raw record: `{label: value, …}`, with a place at its end to add a
 field. -/
 partial def record (path : Path) (fields : List (CellId × Value)) : M Doc := do
-  let shown ← (ordered s fields).mapM fun (l, v) => field path l (some v)
+  let shown ← (ordered s fields).mapM fun (l, v) => field path l (some v) (plain := true)
   let adding ← newLabel path
   let end_ ← if adding.isEmpty then pure [← occ path .fieldEnd (.point .ink)] else pure []
   let parts := shown ++ adding
@@ -438,14 +448,300 @@ partial def call (path : Path) (v : Value) : M Doc := do
 
 end
 
-/-- The whole document: its root, or the hole of an empty one. -/
-def document : M Doc := value s [] s.doc.root
+/-! ## Parts
 
-/-- The document laid out: its lines, and the occurrences their spans are
-marked with (mark `n` is occurrence `n - 1`). -/
-def laid (ribbon : Nat) : Array Line × Array Occ :=
-  let (doc, drawn) := (document s).run {}
-  (Doc.lines ribbon 0 0 0 doc, drawn.occs)
+The document is drawn in parts, one under another: each entry of a notebook
+at the root is one, and any other root is one on its own. A part is laid
+out from an `Input`, which holds all the part depends on: its value, the
+definitions it reaches, and the selection, folds and results that touch
+it. So a part whose input is as it was is as it was, and is laid out again
+only when its input changes. -/
+
+/-- Where an occurrence is first drawn, within its part. -/
+structure Stop where
+  occ : Nat
+  line : Nat
+  col : Nat
+  /-- Whether it's a place with no width: a point between things. -/
+  point : Bool := false
+  deriving DecidableEq, Inhabited
+
+/-- Each occurrence that's drawn, where it starts, in reading order: by
+line, then column; where two start together, a point before a value, and a
+container before what it holds. -/
+def stops (lines : Array Line) (occs : Array Occ) : Array Stop :=
+  let first : Array (Option (Nat × Nat × Bool)) := Id.run do
+    let mut first := Array.replicate occs.size none
+    for i in [0:lines.size] do
+      for span in lines[i]! do
+        if span.mark > 0 && span.mark ≤ occs.size then
+          if first[span.mark - 1]!.isNone then
+            first := first.set! (span.mark - 1) (some (i, span.col, span.text.isEmpty && span.face != .caret))
+    return first
+  let found := (List.range occs.size).filterMap fun i =>
+    first[i]!.map fun (line, col, point) => (⟨i, line, col, point⟩ : Stop)
+  found.toArray.qsort fun a b =>
+    a.line < b.line || (a.line == b.line && (a.col < b.col ||
+      (a.col == b.col && ((a.point && !b.point) || (a.point == b.point && a.occ > b.occ)))))
+
+/-- A span as it goes on the screen: with whether the selection covers it,
+whether an error is about it, and whether it's another place the selected
+cell is. -/
+structure Piece where
+  col : Nat
+  text : String
+  face : Face
+  mark : Nat
+  selected : Bool := false
+  failed : Bool := false
+  other : Bool := false
+  deriving DecidableEq, Inhabited
+
+/-- A line as it goes on the screen: all a row of the scene is made from,
+so a line that's the same after an edit is a row left alone. -/
+abbrev Row := Shared (Array Piece)
+
+/-- A part, laid out: its lines, the occurrences their spans are marked
+with (mark `n` is occurrence `n - 1`), where each is first drawn, the
+selection it was drawn with, and its lines as they go on the screen. -/
+structure Block where
+  lines : Array Line
+  occs : Array Occ
+  stops : Array Stop
+  selection : Option Selection
+  rows : List Row
+  deriving DecidableEq, Inhabited
+
+/-- Whether two parts are the same: at once if they're the one object, as a
+part is that wasn't laid out again. -/
+def Block.same (a b : Block) : Bool :=
+  withPtrEq a b (fun _ => decide (a = b)) (by intro h; simp [h])
+
+theorem Block.same_sound (a b : Block) (h : Block.same a b = true) : a = b :=
+  of_decide_eq_true h
+
+theorem Block.same_refl (a : Block) : Block.same a a = true :=
+  decide_eq_true rfl
+
+/-- Whether a selection covers an occurrence: it, and what's drawn inside
+it; not the label of the field it's the value of. -/
+def covers (sel : Selection) (o : Occ) : Bool :=
+  match sel.stage with
+  | .label => o.kind == .fieldEnd && o.path == sel.path
+  | _ => sel.path.isPrefixOf o.path && !(o.kind == .label && o.path == sel.path) && o.kind != .fieldEnd
+
+/-- What a part is of. -/
+inductive Shape where
+  /-- The whole document: its root, or the hole of an empty one. -/
+  | whole (root : Option Value)
+  /-- A notebook's entry at a path, numbered: its value, or the hole of one
+  being added; and the places to add an entry before it, and after it if
+  it's the last. -/
+  | entry (number : Nat) (path : Path) (value : Option Value) (before after : Option Path)
+  /-- A notebook with no entries: the place to add the first. -/
+  | empty (point : Path)
+  deriving DecidableEq
+
+/-- All a part's layout depends on. -/
+structure Input where
+  shape : Shape
+  /-- The definitions it reaches, in the document. -/
+  cells : Shared (List (CellId × Value))
+  selection : Option Selection
+  folds : List (Path × Bool)
+  results : List (Value × Outcome)
+  /-- The selected cell, if this part may show it elsewhere. -/
+  marked : Option CellId
+  ribbon : Nat
+  deriving DecidableEq
+
+def partDoc : Shape → M Doc
+  | .whole root => value s [] root
+  | .entry number path v before after => do
+    let point (p : Option Path) : M Doc :=
+      match p with
+      | some p => occ p .insertion (.point .ink)
+      | none => pure (.row [])
+    let b ← point before
+    let item ← value s path v
+    let a ← point after
+    return .col [.row [dim (toString number ++ (if number < 10 then "  " else " ")), .hang 3 (.row [b, item, a])], t ""]
+  | .empty point => occ point .insertion (.point .ink)
+
+end Display
+
+open Display in
+/-- A part, laid out. -/
+def Display.part (i : Input) : Block :=
+  let s : Shown :=
+    { doc := { root := none, cells := Std.TreeMap.ofList i.cells.val }, library := Builtin.library,
+      selection := i.selection, folds := i.folds, results := i.results }
+  let (doc, drawn) := (partDoc s i.shape).run {}
+  let lines := Doc.lines i.ribbon 0 0 0 doc
+  let occs := drawn.occs
+  let piece (s : Span) : Piece :=
+    match occs[s.mark - 1]? with
+    | some o =>
+      if s.mark == 0 then { col := s.col, text := s.text, face := s.face, mark := 0 }
+      else
+        let selected := match i.selection with
+          | some sel => covers sel o
+          | none => false
+        { col := s.col, text := s.text, face := s.face, mark := s.mark, selected, failed := o.failed,
+          other := !selected && !s.text.isEmpty && (o.kind == .value || o.kind == .label) && o.cell.isSome &&
+            o.cell == i.marked }
+    | none => { col := s.col, text := s.text, face := s.face, mark := 0 }
+  { lines, occs, stops := stops lines occs, selection := i.selection, rows := lines.toList.map fun l => ⟨l.map piece⟩ }
+
+namespace Display
+
+/-- Every evaluation's expression in a value, after those gathered. -/
+partial def expressionsInto (found : Array Value) : Value → Array Value
+  | .cell _ | .blob _ => found
+  | .list items => items.foldl (fun found (_, v) => expressionsInto found v) found
+  | v@(.record fields) =>
+    let found := if v.kind? == some Kinds.evaluation then
+        match v.field? Kinds.expression with
+        | some e => found.push e
+        | none => found
+      else found
+    fields.foldl (fun found (_, w) => expressionsInto found w) found
+
+/-- Every evaluation's expression in a value. -/
+def expressionsIn (v : Value) : List Value := (expressionsInto #[] v).toList
+
+/-- Every cell a value mentions, after those gathered. -/
+partial def mentionsInto (found : Array CellId) : Value → Array CellId
+  | .cell c => found.push c
+  | .blob _ => found
+  | .list items => items.foldl (fun found (_, v) => mentionsInto found v) found
+  | .record fields => fields.foldl (fun found (l, v) => mentionsInto (found.push l) v) found
+
+/-- The document's definitions, in order: one object while the document's
+definitions are, so that what's worked out from them is compared at once. -/
+abbrev Cells := Shared (Array (CellId × Value))
+
+def Cells.of (d : Document) : Cells := ⟨d.cells.toList.toArray⟩
+
+/-- A definition, among definitions in order. -/
+def definitionIn (cells : Array (CellId × Value)) (c : CellId) : Option Value :=
+  (cells.binSearch (c, default) fun a b => compare a.1 b.1 == .lt).map (·.2)
+
+/-- The definitions cells reach, each once, in the order they're reached. -/
+partial def reachIn (cells : Array (CellId × Value)) (todo : List CellId)
+    (seen : Std.TreeSet CellId := {}) (found : Array (CellId × Value) := #[]) : List (CellId × Value) :=
+  match todo with
+  | [] => found.toList
+  | c :: rest =>
+    if seen.contains c then reachIn cells rest seen found
+    else match definitionIn cells c with
+      | some v => reachIn cells ((mentionsInto #[] v).toList ++ rest) (seen.insert c) (found.push (c, v))
+      | none => reachIn cells rest (seen.insert c) found
+
+/-- What a part of the document is worked out from: an entry of the root
+notebook, or the whole root, with the document's definitions. -/
+inductive ItemKey where
+  | entry (position : Position) (value : Value) (cells : Cells)
+  | whole (root : Option Value) (cells : Cells)
+  deriving DecidableEq
+
+/-- The document, split: the root notebook's entries, or the whole root. -/
+def itemKeys (root : Option Value) (cells : Cells) : List ItemKey :=
+  match root with
+  | some v =>
+    if v.kind? == some Kinds.notebook then
+      match v.field? Kinds.entries with
+      | some (.list items) => items.map fun (p, w) => .entry p w cells
+      | _ => [.whole root cells]
+    else [.whole root cells]
+  | none => [.whole root cells]
+
+/-- A part of the document, with what it reaches: the definitions, and the
+evaluations' expressions in it. -/
+inductive Item where
+  | entry (position : Position) (value : Value) (reached : Shared (List (CellId × Value)))
+      (expressions : List Value)
+  | whole (root : Option Value) (reached : Shared (List (CellId × Value))) (expressions : List Value)
+  deriving DecidableEq, Inhabited
+
+def item : ItemKey → Item
+  | .entry position value cells =>
+    .entry position value ⟨reachIn cells.val (mentionsInto #[] value).toList⟩ (expressionsIn value)
+  | .whole root cells =>
+    match root with
+    | some v => .whole root ⟨reachIn cells.val (mentionsInto #[] v).toList⟩ (expressionsIn v)
+    | none => .whole root ⟨[]⟩ []
+
+/-- What of the editor's state the parts are drawn with. -/
+structure Seen where
+  selection : Option Selection := none
+  folds : List (Path × Bool) := []
+  results : List (Value × Outcome) := []
+  /-- The cell the selection is on, and whether the document defines it. -/
+  marked : Option CellId := none
+  markedDefined : Bool := false
+  ribbon : Nat := 80
+  deriving DecidableEq
+
+/-- The path of the root notebook's entries. -/
+def entriesPath : Path := [.key Kinds.entries]
+
+/-- The parts' inputs: one for each entry, in order, with the hole of an
+entry being added among them, and no place to add an entry beside the hole;
+or one for the whole root. -/
+def assemble (items : List Item) (c : Seen) : List Input :=
+  match items with
+  | [.whole root cells expressions] =>
+    [{ shape := .whole root, cells, selection := c.selection, folds := c.folds,
+       results := c.results.filter fun r => expressions.contains r.1, marked := c.marked, ribbon := c.ribbon }]
+  | _ =>
+    -- The root notebook's entries: an item that isn't one is no entry.
+    let items : List (Position × Value × Shared (List (CellId × Value)) × List Value) :=
+      items.filterMap fun
+        | .entry p v reached expressions => some (p, v, reached, expressions)
+        | .whole .. => none
+    -- The entry being added, if the selection is pending among the entries.
+    let pending : Option Position :=
+      match c.selection with
+      | some sel =>
+        if sel.stage == .pending && sel.path.dropLast == entriesPath then
+          match sel.path.getLast? with
+          | some (.element p) => if items.any (·.1 == p) then none else some p
+          | _ => none
+        else none
+      | none => none
+    let all : List (Position × Option (Value × Shared (List (CellId × Value)) × List Value)) :=
+      match pending with
+      | some p =>
+        (items.filter fun i => Position.lt i.1 p).map (fun i => (i.1, some i.2)) ++ [(p, none)] ++
+          (items.filter fun i => !Position.lt i.1 p).map fun i => (i.1, some i.2)
+      | none => items.map fun i => (i.1, some i.2)
+    let at_ (p : Position) : Path := entriesPath ++ [.element p]
+    let rec go (number : Nat) (prev : Option (Position × Bool)) :
+        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value)) → List Input
+      | [] => []
+      | (p, item) :: rest =>
+        let beside := item.isNone || (prev.map (·.2)).getD false
+        let before := if beside then none else some (at_ (Position.between (prev.map (·.1)) (some p)))
+        let after := if rest.isEmpty && item.isSome then some (at_ (Position.between (some p) none)) else none
+        let path := at_ p
+        let touches (q : Path) : Bool := path.isPrefixOf q || q.isPrefixOf path
+        let cells : Shared (List (CellId × Value)) := (item.map (·.2.1)).getD ⟨[]⟩
+        let expressions := (item.map (·.2.2)).getD []
+        { shape := .entry number path (item.map (·.1)) before after, cells,
+          selection := c.selection.filter fun sel => touches sel.path,
+          folds := c.folds.filter fun f => path.isPrefixOf f.1,
+          results := c.results.filter fun r => expressions.contains r.1,
+          marked := c.marked.filter fun cell => !c.markedDefined || cells.val.any (·.1 == cell),
+          ribbon := c.ribbon } :: go (number + 1) (some (p, item.isNone)) rest
+    if all.isEmpty then
+      [{ shape := .empty (at_ (Position.between none none)), cells := ⟨[]⟩, selection := none, folds := [],
+         results := [], marked := none, ribbon := c.ribbon }]
+    else go 1 none all
+
+/-- A document's parts, laid out: all of it, worked out from nothing. -/
+def blocks (d : Document) (c : Seen) : List Block :=
+  (assemble ((itemKeys d.root (Cells.of d)).map item) c).map part
 
 end Display
 

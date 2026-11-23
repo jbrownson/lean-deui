@@ -188,16 +188,8 @@ def convert (expression : Value) : Except Failure (Array Syntax × Syntax × Arr
   | .ok (t, s) => .ok (s.commands, t.raw, s.nodes)
   | .error f => .error f
 
-/-- Every evaluation's expression in a value. -/
-partial def expressionsIn : Value → List Value
-  | .cell _ | .blob _ => []
-  | .list items => items.flatMap fun (_, v) => expressionsIn v
-  | v@(.record fields) =>
-    (if v.kind? == some Kinds.evaluation then (v.field? Kinds.expression).toList else []) ++
-      fields.flatMap fun (_, w) => expressionsIn w
-
 /-- Every evaluation's expression in a document. -/
 def expressions : List Value :=
-  ((doc.root.map expressionsIn).getD [] ++ doc.cells.toList.flatMap fun (_, v) => expressionsIn v).eraseDups
+  ((doc.root.map Display.expressionsIn).getD [] ++ doc.cells.toList.flatMap fun (_, v) => Display.expressionsIn v).eraseDups
 
 end Progred.ToLean

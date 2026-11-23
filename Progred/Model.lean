@@ -4,7 +4,7 @@ import Progred.Display
 The editor's state: the document, the selection, folds, what evaluations
 gave, and undo. A write records where the document was, so undo is the
 whole state before it. Navigation goes by what's drawn: the occurrences of
-the layout, in reading order.
+the layout, part by part, in reading order.
 -/
 
 namespace Progred
@@ -37,6 +37,9 @@ structure Model where
   /-- Text waiting to go to the clipboard, and whether a paste was asked. -/
   copied : Option String := none
   pasteAsked : Bool := false
+  /-- Whether the selection is to be scrolled into the window, once it's
+  laid out. -/
+  reveal : Bool := false
   /-- The window, in pixels, and how far the view is scrolled down. -/
   width : Nat := 900
   height : Nat := 700
@@ -54,8 +57,29 @@ def shown (m : Model) : Shown :=
 
 def ribbon (m : Model) : Nat := max 30 ((m.width - 2 * margin) / charWidth)
 
-/-- The document laid out, as the window shows it. -/
-def laid (m : Model) : Array Line × Array Occ := Display.laid m.shown m.ribbon
+/-- The value at a path. -/
+def at? (m : Model) (path : Path) : Option Value := m.doc.find? m.library path
+
+/-- The cell the selection is on: the cell selected, or the one whose name
+is. -/
+def selectedCell (m : Model) : Option CellId :=
+  m.selection.bind fun sel =>
+    if sel.stage != .edge then none
+    else
+      let cellAt (path : Path) : Option CellId :=
+        match m.at? path with
+        | some (.cell c) => some c
+        | _ => none
+      (cellAt sel.path).orElse fun _ =>
+        if sel.path.length ≥ 2 && sel.path.drop (sel.path.length - 2) == [.follow, .key Kinds.name] then
+          cellAt (sel.path.take (sel.path.length - 2))
+        else none
+
+/-- What of the state the parts are drawn with. -/
+def seen (m : Model) : Display.Seen :=
+  let marked := m.selectedCell
+  { selection := m.selection, folds := m.folds, results := m.results, marked,
+    markedDefined := (marked.bind m.doc.definition?).isSome, ribbon := m.ribbon }
 
 def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩
 
@@ -86,37 +110,38 @@ def fresh (m : Model) : CellId × Model :=
   | id :: rest => (id, { m with ids := rest })
   | [] => (default, m)
 
-/-- The value at a path. -/
-def at? (m : Model) (path : Path) : Option Value := m.doc.find? m.library path
-
 /-! ## What's drawn, in reading order -/
 
-/-- Where an occurrence is first drawn. -/
-structure Stop where
-  occ : Nat
-  line : Nat
-  col : Nat
-  /-- Whether it's a place with no width: a point between things. -/
-  point : Bool := false
-  deriving Inhabited
+open Display (Block Stop)
 
-/-- Each occurrence that's drawn, where it starts, in reading order: by
-line, then column; where two start together, a point before a value, and a
-container before what it holds. -/
-def stops (lines : Array Line) (occs : Array Occ) : Array Stop :=
-  let first : Array (Option (Nat × Nat × Bool)) := Id.run do
-    let mut first := Array.replicate occs.size none
-    for i in [0:lines.size] do
-      for span in lines[i]! do
-        if span.mark > 0 && span.mark ≤ occs.size then
-          if first[span.mark - 1]!.isNone then
-            first := first.set! (span.mark - 1) (some (i, span.col, span.text.isEmpty && span.face != .caret))
-    return first
-  let found := (List.range occs.size).filterMap fun i =>
-    first[i]!.map fun (line, col, point) => (⟨i, line, col, point⟩ : Stop)
-  found.toArray.qsort fun a b =>
-    a.line < b.line || (a.line == b.line && (a.col < b.col ||
-      (a.col == b.col && ((a.point && !b.point) || (a.point == b.point && a.occ > b.occ)))))
+/-- The document laid out: its parts, one under another. -/
+structure Layout where
+  blocks : List Block
+
+namespace Layout
+
+/-- The document's layout, worked out from nothing. -/
+def of (m : Model) : Layout := ⟨Display.blocks m.doc m.seen⟩
+
+def lineCount (l : Layout) : Nat := l.blocks.foldl (fun n b => n + b.lines.size) 0
+
+/-- The line a part starts at. -/
+def lineOf (l : Layout) (block : Nat) : Nat :=
+  (l.blocks.take block).foldl (fun n b => n + b.lines.size) 0
+
+/-- The part a line is in, and the line within it. -/
+def lineAt (l : Layout) (line : Nat) : Option (Block × Nat) := Id.run do
+  let mut rest := line
+  for b in l.blocks do
+    if rest < b.lines.size then return some (b, rest)
+    rest := rest - b.lines.size
+  return none
+
+/-- The lines, as plain text. -/
+def plain (l : Layout) : List String :=
+  l.blocks.flatMap fun b => b.lines.toList.map (·.plain)
+
+end Layout
 
 /-- Whether an occurrence is the selection's. -/
 def isSelected (sel : Selection) (o : Occ) : Bool :=
@@ -140,57 +165,75 @@ def select (m : Model) (o : Occ) : Model :=
   | some sel => { m with selection := some sel, typingRun := false }
   | none => m
 
-/-- The stop the selection is at, as an index into the stops. -/
-def here (m : Model) (occs : Array Occ) (stops : Array Stop) : Option Nat :=
-  m.selection.bind fun sel => stops.findIdx? fun s => isSelected sel occs[s.occ]!
-
-/-- The nearest stop before or after an index that `want` accepts. -/
-def nextStop (occs : Array Occ) (stops : Array Stop) (from_ : Option Nat) (forward : Bool)
-    (want : OccKind → Bool) : Option Stop :=
-  let candidates := (List.range stops.size).filter fun i =>
-    want occs[stops[i]!.occ]!.kind &&
-      match from_ with
-      | some at_ => if forward then i > at_ else i < at_
-      | none => true
-  (if forward then candidates.head? else candidates.getLast?).map (stops[·]!)
+/-- Where the selection is drawn: its part, and its stop there. -/
+def Layout.here (l : Layout) (m : Model) : Option (Nat × Nat) :=
+  m.selection.bind fun sel =>
+    (List.range l.blocks.length).findSome? fun b =>
+      let block := l.blocks[b]!
+      if block.selection.isNone then none
+      else (block.stops.findIdx? fun s => isSelected sel block.occs[s.occ]!).map (b, ·)
 
 def isPlace (k : OccKind) : Bool := k == .value || k == .hole
 def isTabStop (k : OccKind) : Bool := k == .hole || k == .insertion || k == .fieldEnd
 
+/-- The nearest stop after or before a place that `want` accepts, with its
+part: in the same part, else in the parts that follow, or come before. From
+no place, the first of the document, or the last. -/
+def Layout.next (l : Layout) (from_ : Option (Nat × Nat)) (forward : Bool) (want : OccKind → Bool) :
+    Option (Block × Stop) :=
+  let wanted (block : Block) (keep : Nat → Bool) : List Stop :=
+    (List.range block.stops.size).filterMap fun i =>
+      let s := block.stops[i]!
+      if keep i && want block.occs[s.occ]!.kind then some s else none
+  let pick (block : Block) (stops : List Stop) : Option (Block × Stop) :=
+    (if forward then stops.head? else stops.getLast?).map (block, ·)
+  let others (blocks : List Nat) : Option (Block × Stop) :=
+    blocks.findSome? fun b => pick l.blocks[b]! (wanted l.blocks[b]! fun _ => true)
+  let all := List.range l.blocks.length
+  match from_ with
+  | some (b, i) =>
+    (pick l.blocks[b]! (wanted l.blocks[b]! fun j => if forward then j > i else j < i)).orElse fun _ =>
+      others (if forward then all.filter (· > b) else (all.filter (· < b)).reverse)
+  | none => others (if forward then all else all.reverse)
+
 /-- The selection moved to the next or previous thing drawn. -/
-def step (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Model :=
-  let (lines, occs) := m.laid
-  let stops := stops lines occs
-  match nextStop occs stops (m.here occs stops) forward want with
-  | some s => m.select occs[s.occ]!
+def step (laid : Model → Layout) (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Model :=
+  let l := laid m
+  match l.next (l.here m) forward want with
+  | some (block, s) => m.select block.occs[s.occ]!
   | none => if want .insertion then { m with selection := none } else m
 
 /-- The selection moved to the nearest line above or below with something
 on it, to what starts nearest the column it's at. -/
-def stepLine (m : Model) (down : Bool) : Model :=
-  let (lines, occs) := m.laid
-  let stops := stops lines occs
-  match m.here occs stops with
-  | none => m.step true
-  | some at_ =>
-    let here := stops[at_]!
-    let others := stops.toList.filter fun s =>
-      isPlace occs[s.occ]!.kind && (if down then s.line > here.line else s.line < here.line)
+def stepLine (laid : Model → Layout) (m : Model) (down : Bool) : Model :=
+  let l := laid m
+  match l.here m with
+  | none => m.step laid true
+  | some (b, i) =>
+    let here := l.blocks[b]!.stops[i]!
+    -- The places of a part, and whether each is past the line left.
+    let places (block : Block) (keep : Stop → Bool) : List Stop :=
+      block.stops.toList.filter fun s => isPlace block.occs[s.occ]!.kind && keep s
     let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
-    let target := ((if down then others.head? else others.getLast?).map fun near =>
-      (others.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near)
+    let nearest (block : Block) (stops : List Stop) : Option (Block × Stop) :=
+      ((if down then stops.head? else stops.getLast?).map fun near =>
+        (stops.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near).map
+        (block, ·)
+    let all := List.range l.blocks.length
+    let target :=
+      (nearest l.blocks[b]! (places l.blocks[b]! fun s => if down then s.line > here.line else s.line < here.line)).orElse
+        fun _ => (if down then all.filter (· > b) else (all.filter (· < b)).reverse).findSome? fun b' =>
+          nearest l.blocks[b']! (places l.blocks[b']! fun _ => true)
     match target with
-    | some s => m.select occs[s.occ]!
+    | some (block, s) => m.select block.occs[s.occ]!
     | none => m
 
 /-- The scroll that keeps the selection's line in the window. -/
-def revealed (m : Model) : Model :=
-  let (lines, occs) := m.laid
-  let stops := stops lines occs
-  match m.here occs stops with
+def revealed (l : Layout) (m : Model) : Model :=
+  match l.here m with
   | none => m
-  | some at_ =>
-    let top := stops[at_]!.line * lineHeight
+  | some (b, i) =>
+    let top := (l.lineOf b + l.blocks[b]!.stops[i]!.line) * lineHeight
     let room := m.height - 2 * margin
     if top < m.scroll then { m with scroll := top }
     else if top + lineHeight > m.scroll + room then { m with scroll := top + lineHeight - room }

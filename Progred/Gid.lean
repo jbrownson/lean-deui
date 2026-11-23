@@ -109,7 +109,71 @@ inductive Value where
   | blob (bytes : List UInt8)
   | list (items : List (Position × Value))
   | record (fields : List (CellId × Value))
-  deriving BEq, Inhabited
+  deriving Inhabited
+
+mutual
+/-- Whether two values are equal, decided through their structure. A value
+held in two places is one object, and `withPtrEqDecEq` answers for it
+without looking inside: comparing a document with itself after an edit
+looks only at what the edit touched. -/
+def Value.decEq : (a b : Value) → Decidable (a = b)
+  | .cell a, .cell b => if h : a = b then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
+  | .blob a, .blob b => if h : a = b then isTrue (by rw [h]) else isFalse (by intro e; cases e; exact h rfl)
+  | .list a, .list b =>
+    match Value.decItems a b with
+    | isTrue h => isTrue (by rw [h])
+    | isFalse h => isFalse (by intro e; cases e; exact h rfl)
+  | .record a, .record b =>
+    match Value.decFields a b with
+    | isTrue h => isTrue (by rw [h])
+    | isFalse h => isFalse (by intro e; cases e; exact h rfl)
+  | .cell _, .blob _ | .cell _, .list _ | .cell _, .record _ => isFalse nofun
+  | .blob _, .cell _ | .blob _, .list _ | .blob _, .record _ => isFalse nofun
+  | .list _, .cell _ | .list _, .blob _ | .list _, .record _ => isFalse nofun
+  | .record _, .cell _ | .record _, .blob _ | .record _, .list _ => isFalse nofun
+
+def Value.decItems : (a b : List (Position × Value)) → Decidable (a = b)
+  | [], [] => isTrue rfl
+  | [], _ :: _ => isFalse nofun
+  | _ :: _, [] => isFalse nofun
+  | (p, v) :: xs, (q, w) :: ys =>
+    if hp : p = q then
+      match withPtrEqDecEq v w (fun _ => Value.decEq v w) with
+      | isTrue hv =>
+        match Value.decItems xs ys with
+        | isTrue ht => isTrue (by rw [hp, hv, ht])
+        | isFalse ht => isFalse (by intro e; injection e with _ e2; exact ht e2)
+      | isFalse hv => isFalse (by intro e; injection e with e1 _; injection e1 with _ e3; exact hv e3)
+    else isFalse (by intro e; injection e with e1 _; injection e1 with e3 _; exact hp e3)
+
+def Value.decFields : (a b : List (CellId × Value)) → Decidable (a = b)
+  | [], [] => isTrue rfl
+  | [], _ :: _ => isFalse nofun
+  | _ :: _, [] => isFalse nofun
+  | (p, v) :: xs, (q, w) :: ys =>
+    if hp : p = q then
+      match withPtrEqDecEq v w (fun _ => Value.decEq v w) with
+      | isTrue hv =>
+        match Value.decFields xs ys with
+        | isTrue ht => isTrue (by rw [hp, hv, ht])
+        | isFalse ht => isFalse (by intro e; injection e with _ e2; exact ht e2)
+      | isFalse hv => isFalse (by intro e; injection e with e1 _; injection e1 with _ e3; exact hv e3)
+    else isFalse (by intro e; injection e with e1 _; injection e1 with e3 _; exact hp e3)
+end
+
+instance : DecidableEq Value := fun a b => withPtrEqDecEq a b (fun _ => Value.decEq a b)
+
+/-- A value that's compared as one object first: two that are the same
+object are equal without being looked into. For what's held and passed
+along unchanged. -/
+structure Shared (α : Type) where
+  val : α
+  deriving Inhabited
+
+instance {α : Type} [DecidableEq α] : DecidableEq (Shared α) := fun a b =>
+  withPtrEqDecEq a b fun _ =>
+    if h : a.val = b.val then isTrue (by cases a; cases b; simp at h; rw [h])
+    else isFalse (by intro e; exact h (by rw [e]))
 
 /-- A step from a value to one inside it: a record's field, a list's
 element, or from a cell to its definition. -/
@@ -117,7 +181,7 @@ inductive Step where
   | key (label : CellId)
   | element (position : Position)
   | follow
-  deriving BEq, Inhabited
+  deriving DecidableEq, Inhabited
 
 abbrev Path := List Step
 

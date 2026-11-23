@@ -121,10 +121,10 @@ partial def loop (app : App cs) (w : Window) (background : UInt32) (m : Model ap
 
 /-- As `loop`, and after each batch of events asks `outside` for edits that
 come from outside the app: results of work, something read. They go to the
-state and the screen as an event's do (`edited_shows`, `edited_edits`). -/
+state and the screen as an event's do (`applied_shows`, `applied_edits`). -/
 partial def loopWith (app : App cs) (outside : cs.Value → IO (List cs.Edit)) (w : Window)
     (background : UInt32) (m : Model app) : IO Unit := do
-  let (m, edits) := edited app m (← outside m.state)
+  let (m, edits) := applied app m (← outside m.state)
   w.edit edits
   w.draw background
   let es ← w.events

@@ -26,15 +26,15 @@ def fill : List Scene → List SceneEdit
 /-- The scene: the rows, in a group at the origin. -/
 def scene (rows : List Scene) : Scene := .group 0 0 rows
 
-variable {cs : EditStructure} (rows : cs.Value → List Scene)
+variable {ca : EditStructure} (rows : ca.Value → List Scene)
 
-/-- `rows`, as a view whose derivative redraws: it keeps the state and how
+/-- `rows`, as a view whose derivative redraws: it keeps the value and how
 many rows are on the screen. -/
-def redraw : Cached (runs cs) (runs sceneEdits) where
-  Cache := cs.Value × Nat
+def redraw : Cached ca (runs sceneEdits) where
+  Cache := ca.Value × Nat
   f s := (scene (rows s), s, (rows s).length)
-  df c es :=
-    let s := run cs es c.1
+  df c e :=
+    let s := ca.apply e c.1
     (clear c.2 ++ fill (rows s), s, (rows s).length)
 
 theorem clear_ok (rs : List Scene) : run sceneEdits (clear rs.length) (scene rs) = scene [] := by
@@ -52,8 +52,8 @@ theorem fill_ok (rs : List Scene) : run sceneEdits (fill rs) (scene []) = scene 
 
 /-- Redrawing is correct, for any rows. -/
 theorem redraw_ok : (redraw rows).ok := by
-  intro s es
-  show (run sceneEdits (clear (rows s).length ++ fill (rows (run cs es s))) (scene (rows s)), _, _) = _
+  intro s e
+  show (run sceneEdits (clear (rows s).length ++ fill (rows (ca.apply e s))) (scene (rows s)), _, _) = _
   rw [run_append, clear_ok, fill_ok]
   rfl
 

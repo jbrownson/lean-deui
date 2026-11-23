@@ -7,5 +7,6 @@ import Progred.Display
 import Progred.Model
 import Progred.Editing
 import Progred.Editor
+import Progred.Axioms
 import Progred.Run
 import Progred.Lean

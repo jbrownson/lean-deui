@@ -94,7 +94,9 @@ def text (z : Items) (t : String) : Edits := first z (· ++ t)
 def scroll (_ : Items) (dy : Float) : Edits :=
   [.scroll (-(dy * 40).toInt64.toInt)]
 
-def app : App.App itemsEdits := ⟨view, App.handlers press key text scroll⟩
+def app : App.App itemsEdits where
+  view := view
+  respond := App.handlers press key text scroll
 
 def items : Items := ⟨[], [⟨"Buy milk", false⟩, ⟨"Write laws", false⟩], 0⟩
 

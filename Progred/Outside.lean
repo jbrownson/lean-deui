@@ -92,7 +92,7 @@ unsafe def edits (rt : Run.Runtime) (memo : Memo) (file : Option System.FilePath
         | .ok d => pure (some d)
         | .error _ => pure none
       else pure none
-    m' := (Model.pasted { m' with pasteAsked := false } text clip).revealed
+    m' := { Model.pasted { m' with pasteAsked := false } text clip with reveal := true }
     changed := true
   if m'.stale then
     m' := { m' with results := ← evaluate rt memo m', stale := false }

@@ -264,7 +264,8 @@ def retype (m : Model) (sel : Selection) (e : Editing) : Model :=
 /-! ## Keys -/
 
 def toggleFold (m : Model) (path : Path) (c : CellId) : Model :=
-  let closed := Display.isOpen m.shown path c
+  let plain := ((m.at? path.dropLast).bind (·.kind?)).isNone
+  let closed := Display.isOpen m.shown path c plain
   { m with folds := (path, closed) :: m.folds.filter (·.1 != path) }
 
 /-- A character typed. -/
@@ -356,21 +357,20 @@ def holeDrawn (m : Model) (path : Path) : Bool :=
 
 /-- The selection resting on a path, or on the nearest thing above it
 that's drawn. -/
-partial def restDrawn (m : Model) (path : Path) : Model :=
+partial def restDrawn (laid : Model → Layout) (m : Model) (path : Path) : Model :=
   let rested := m.rest path
-  let (lines, occs) := rested.laid
-  if (rested.here occs (stops lines occs)).isSome || path.isEmpty then rested else restDrawn m path.dropLast
+  if ((laid rested).here rested).isSome || path.isEmpty then rested else restDrawn laid m path.dropLast
 
 /-- The selected value deleted, its place left selected as a hole; on a
 hole, the hole removed, the selection going to the element after it or
 before, or to what held it. -/
-def delete (m : Model) (sel : Selection) : Model :=
+def delete (laid : Model → Layout) (m : Model) (sel : Selection) : Model :=
   if (m.at? sel.path).isSome && sel.stage == .edge then
     match m.doc.delete sel.path with
     | some doc =>
       let m := m.write doc
       if holeDrawn m sel.path then { m with selection := some { path := sel.path, stage := .pending } }
-      else restDrawn m sel.path.dropLast
+      else restDrawn laid m sel.path.dropLast
     | none => m
   else
     match parent? sel.path with
@@ -383,8 +383,8 @@ def delete (m : Model) (sel : Selection) : Model :=
           let positions := positionsAt m holder
           match (positions.filter (Position.lt p ·)).head? <|> (positions.filter (Position.lt · p)).getLast? with
           | some q => m.rest (holder ++ [.element q])
-          | none => restDrawn m holder
-        | _ => restDrawn m holder
+          | none => restDrawn laid m holder
+        | _ => restDrawn laid m holder
     | none => { m with selection := none }
 
 /-! ## The clipboard -/
@@ -457,7 +457,7 @@ def keyLeft : UInt32 := 63234
 def keyRight : UInt32 := 63235
 
 /-- A key pressed. -/
-def key (m : Model) (code mods : UInt32) : Model :=
+def key (laid : Model → Layout) (m : Model) (code mods : UInt32) : Model :=
   let shift := Deui.App.Mods.has mods Deui.App.Mods.shift
   let command := Deui.App.Mods.has mods Deui.App.Mods.control || Deui.App.Mods.has mods Deui.App.Mods.super
   if command && code == 'z'.toNat.toUInt32 then (if shift then m.redone else m.undone)
@@ -469,36 +469,36 @@ def key (m : Model) (code mods : UInt32) : Model :=
     match m.selection with
     | some sel =>
       if sel.editing.isNone && sel.stage == .edge && m.doc.writable m.library sel.path then
-        delete { m with copied := clipping m } sel
+        delete laid { m with copied := clipping m } sel
       else m
     | none => m
   else
   match m.selection with
   | none =>
-    if code == keyDown || code == keyRight || code == keyTab then m.step true (if code == keyTab then isTabStop else isPlace)
+    if code == keyDown || code == keyRight || code == keyTab then m.step laid true (if code == keyTab then isTabStop else isPlace)
     else m
   | some sel =>
     match sel.editing with
     | some e =>
       if code == keyLeft then
         if e.caret > 0 then { m with selection := some { sel with editing := some { e with caret := e.caret - 1 } } }
-        else (stopTyping m sel).step false
+        else (stopTyping m sel).step laid false
       else if code == keyRight then
         if e.caret < e.text.length then { m with selection := some { sel with editing := some { e with caret := e.caret + 1 } } }
-        else (stopTyping m sel).step true
+        else (stopTyping m sel).step laid true
       else if code == keyUp then
         if e.picker && !(offers m).isEmpty then
           { m with selection := some { sel with editing := some { e with choice := e.choice - 1 } } }
-        else (stopTyping m sel).stepLine false
+        else (stopTyping m sel).stepLine laid false
       else if code == keyDown then
         if e.picker && !(offers m).isEmpty then
           { m with selection := some { sel with editing := some { e with choice := min (e.choice + 1) ((offers m).length - 1) } } }
-        else (stopTyping m sel).stepLine true
+        else (stopTyping m sel).stepLine laid true
       else if code == keyBackspace then
         if e.caret > 0 then
           let text := (e.text.take (e.caret - 1)).toString ++ (e.text.drop e.caret).toString
           retype m sel { e with text, caret := e.caret - 1, choice := 0 }
-        else if e.text.isEmpty then delete m { sel with editing := none }
+        else if e.text.isEmpty then delete laid m { sel with editing := none }
         else m
       else if code == keyDelete then
         let text := (e.text.take e.caret).toString ++ (e.text.drop (e.caret + 1)).toString
@@ -511,7 +511,7 @@ def key (m : Model) (code mods : UInt32) : Model :=
         else stopTyping m sel
       else if code == keyTab then
         let m := if e.picker && !e.text.isEmpty then commit m else stopTyping m sel
-        m.step (!shift) isTabStop
+        m.step laid (!shift) isTabStop
       else if code == keyEscape then
         if sel.stage == .edge && (m.at? sel.path).isSome then stopTyping m sel
         else match parent? sel.path with
@@ -519,14 +519,14 @@ def key (m : Model) (code mods : UInt32) : Model :=
           | none => { m with selection := none }
       else m
     | none =>
-      if code == keyLeft then m.step false
-      else if code == keyRight then m.step true
-      else if code == keyUp then m.stepLine false
-      else if code == keyDown then m.stepLine true
-      else if code == keyTab then m.step (!shift) isTabStop
+      if code == keyLeft then m.step laid false
+      else if code == keyRight then m.step laid true
+      else if code == keyUp then m.stepLine laid false
+      else if code == keyDown then m.stepLine laid true
+      else if code == keyTab then m.step laid (!shift) isTabStop
       else if code == keyEscape then { m with selection := none }
       else if code == keyBackspace || code == keyDelete then
-        if m.doc.writable m.library sel.path then delete m sel else m
+        if m.doc.writable m.library sel.path then delete laid m sel else m
       else if code == keyReturn then
         if !m.doc.writable m.library sel.path then m
         else if sel.stage == .pending then m.openAt sel.path
@@ -534,22 +534,16 @@ def key (m : Model) (code mods : UInt32) : Model :=
         else peer m sel.path shift
       else m
 
-/-- What a click on an occurrence, or on an offer, does. The tag is the
-occurrence's mark, or `offerTag` and the offer's index. -/
+/-- An offer's target is tagged `offerTag` and the offer's index. -/
 def offerTag : UInt32 := 1000000
 
-def clicked (m : Model) (tag : UInt32) : Model :=
-  if tag ≥ offerTag then
-    match m.selection with
-    | some sel =>
-      match sel.editing with
-      | some e => commit { m with selection := some { sel with editing := some { e with choice := (tag - offerTag).toNat } } }
-      | none => m
+/-- A click on an offer takes it. -/
+def clickedOffer (m : Model) (index : Nat) : Model :=
+  match m.selection with
+  | some sel =>
+    match sel.editing with
+    | some e => commit { m with selection := some { sel with editing := some { e with choice := index } } }
     | none => m
-  else
-    let (_, occs) := m.laid
-    match occs[tag.toNat - 1]? with
-    | some o => if tag == 0 then m else m.select o
-    | none => m
+  | none => m
 
 end Progred.Model
