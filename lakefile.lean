@@ -37,6 +37,9 @@ lean_exe todo_long where
   moreLinkObjs := #[libscreen]
   moreLinkArgs := #["-ldl"]
 
+/-- Progred: a projectional editor, on deui. -/
+lean_lib Progred
+
 /-- A spike: Lean built as data and run at run time. -/
 lean_exe spike where
   root := `Spike.Runtime
