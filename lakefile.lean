@@ -44,3 +44,7 @@ lean_lib Progred
 lean_exe spike where
   root := `Spike.Runtime
   supportInterpreter := true
+
+/-- Reads GID text files and writes them back, to check the two agree. -/
+lean_exe gid_round_trip where
+  root := `Spike.RoundTrip
