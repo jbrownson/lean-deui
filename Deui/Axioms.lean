@@ -4,6 +4,7 @@ import Deui.Scroll
 import Deui.App
 import Deui.Flatten
 import Deui.Anchored
+import Deui.Sift
 
 /-! Every law's axioms, checked by `lake build`: it fails on a `sorry` or a
 new axiom. -/
@@ -70,3 +71,6 @@ new axiom. -/
 
 /-- info: 'Deui.App.applied_shows' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.App.applied_shows
+
+/-- info: 'Deui.Lists.sifted_ok' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Deui.Lists.sifted_ok

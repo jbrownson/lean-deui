@@ -3,6 +3,7 @@ import Deui.Redraw
 import Deui.Anchored
 import Deui.Flatten
 import Deui.Drawn
+import Deui.Sift
 
 /-!
 The editor as a deui app. Its state is the model, and its view is made of
@@ -90,7 +91,7 @@ def rowScene (r : Row) : Scene := .group 0 0 (lineParts r.val)
 abbrev edits : EditStructure := whole (plain Model)
 
 /-- The model, and the document laid out: its parts, edited as a list. -/
-abbrev Laid : EditStructure := prod (latest Model) (runs (Lists.editStructure (plain Display.Block)))
+abbrev Laid : EditStructure := prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Block))))
 
 /-- Whether two models hold the same definitions: at once if they're the
 one object, as they are unless an edit wrote to a definition. -/
@@ -107,14 +108,6 @@ theorem cells_ok : cells.ok :=
     have e : a.doc.cells.toList = b.doc.cells.toList := of_decide_eq_true h
     show (⟨a.doc.cells.toList.toArray⟩ : Display.Cells) = ⟨b.doc.cells.toList.toArray⟩
     rw [e]
-
-/-- Whether two values are the same: at once if they're the one object. -/
-def equal {α : Type} [DecidableEq α] (a b : α) : Bool :=
-  withPtrEq a b (fun _ => decide (a = b)) (by intro h; simp [h])
-
-theorem equal_refl {α : Type} [DecidableEq α] (a : α) : equal a a = true := decide_eq_true rfl
-
-theorem equal_sound {α : Type} [DecidableEq α] (a b : α) (h : equal a b = true) : a = b := of_decide_eq_true h
 
 /-- The model, the definitions, and what each part is worked out from. -/
 abbrev Keys : EditStructure := latest ((Model × Display.Cells) × List Display.ItemKey)
@@ -148,32 +141,57 @@ theorem itemInc_ok : itemInc.ok := fun _ e => nomatch e
 abbrev Items : EditStructure :=
   prod (latest (Model × Display.Cells)) (runs (Lists.editStructure (plain Display.Item)))
 
-/-- The model, and each part's input. -/
-abbrev Inputs : EditStructure := latest (((Model × Display.Cells) × List Display.Item) × List Display.Input)
+/-- The model, the parts' items, and the parts. -/
+abbrev Frames : EditStructure :=
+  latest (((Model × Display.Cells) × List Display.Item) × List Display.Frame)
 
-/-- Each part's input, kept while the parts and what the model shows of
-them are the same: an event that only scrolls asks nothing of the parts. -/
-def inputsKept : Cached Items Inputs :=
-  memo (ca := Items) (fun (a : (Model × Display.Cells) × List Display.Item) => Display.assemble a.2 a.1.1.seen)
+/-- The parts, kept while the items are the same and no entry is being
+added, or the same one is. -/
+def framesKept : Cached Items Frames :=
+  memo (ca := Items)
+    (fun (a : (Model × Display.Cells) × List Display.Item) =>
+      Display.frames a.2 (Display.pendingEntry a.1.1.selection))
     (fun (a b : (Model × Display.Cells) × List Display.Item) =>
-      Lists.alike (A := Display.Item) equal equal_refl a.2 b.2 && decide (a.1.1.seen = b.1.1.seen))
+      Lists.alike (A := Display.Item) equal equal_refl a.2 b.2 &&
+        decide (Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection))
 
-theorem inputsKept_ok : inputsKept.ok :=
+theorem framesKept_ok : framesKept.ok :=
   memo_ok _ _ fun a b h => by
     simp only [Bool.and_eq_true] at h
-    have e1 : a.2 = b.2 :=
-      Lists.alike_sound (A := Display.Item) equal equal_refl equal_sound _ _ h.1
-    have e2 : a.1.1.seen = b.1.1.seen := of_decide_eq_true h.2
-    show Display.assemble a.2 a.1.1.seen = Display.assemble b.2 b.1.1.seen
+    have e1 : a.2 = b.2 := Lists.alike_sound (A := Display.Item) equal equal_refl equal_sound _ _ h.1
+    have e2 : Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection := of_decide_eq_true h.2
+    show Display.frames a.2 (Display.pendingEntry a.1.1.selection) =
+      Display.frames b.2 (Display.pendingEntry b.1.1.selection)
     rw [e1, e2]
 
-/-- And as edits to the list of them: an input that's as it was is no edit. -/
-def inputs : Cached Inputs (prod (latest Model) (runs (Lists.editStructure (plain Display.Input)))) :=
-  tracked (ca := Inputs)
-    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Input) => a.1.1.1)
-    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Input) => a.2) equal equal_refl
+/-- The model with what the parts are drawn with, and the parts, edited as
+a list. -/
+abbrev Parts : EditStructure :=
+  prod (latest (Model × Display.Seen)) (runs (Lists.editStructure (plain Display.Frame)))
 
-theorem inputs_ok : inputs.ok := tracked_ok _ _ _ _ equal_sound
+/-- The parts as edits to the list of them, with what of the model they're
+drawn with worked out once. -/
+def frames : Cached Frames Parts :=
+  tracked (ca := Frames)
+    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Frame) => (a.1.1.1, a.1.1.1.seen))
+    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Frame) => a.2) equal equal_refl
+
+theorem frames_ok : frames.ok := tracked_ok _ _ _ _ equal_sound
+
+/-- Each part's input. A change of the model is asked of each part, and
+only a part it touches is given a new input: a selection that moves makes
+edits at the parts it leaves and enters. -/
+def inputs : Cached Parts (prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Input))))) :=
+  Cached.carrying (fun (a : Model × Display.Seen) => a.1)
+    (Lists.sifted (cc := latest (Model × Display.Seen)) (fun (a : Model × Display.Seen) frame => Display.input a.2 frame)
+      (fun (a b : Model × Display.Seen) frame _ => Display.touched a.2 b.2 frame)
+      (fun (a b : Model × Display.Seen) => Display.still a.2 b.2))
+
+theorem inputs_ok : inputs.ok :=
+  Cached.carrying_ok _ _
+    (Lists.sifted_ok _ _ _
+      (fun (c d : Model × Display.Seen) frame h => Display.input_of_not_touched c.2 d.2 frame h)
+      (fun (c d : Model × Display.Seen) h frame => Display.not_touched_of_still c.2 d.2 h frame))
 
 /-- A part's layout, of its input. -/
 def partInc : Inc (plain Display.Input) (plain Display.Block) := ⟨Display.part, fun _ e => nomatch e⟩
@@ -185,20 +203,24 @@ is laid out again only where its input changed. -/
 def layout : Cached (runs edits) Laid :=
   compose
     (compose
-      (compose (compose (compose (compose cells keysKept) keys) (Cached.second (cached (Lists.map.inc itemInc))))
-        inputsKept)
+      (compose
+        (compose (compose (compose (compose cells keysKept) keys) (Cached.second (cached (Lists.map.inc itemInc))))
+          framesKept)
+        frames)
       inputs)
-    (Cached.second (cached (Lists.map.inc partInc)))
+    (Cached.second (cached (Lists.map.inc (whole.lift partInc))))
 
 theorem layout_ok : layout.ok :=
   compose_ok _ _
     (compose_ok _ _
       (compose_ok _ _
-        (compose_ok _ _ (compose_ok _ _ (compose_ok _ _ cells_ok keysKept_ok) keys_ok)
-          (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ itemInc_ok))))
-        inputsKept_ok)
+        (compose_ok _ _
+          (compose_ok _ _ (compose_ok _ _ (compose_ok _ _ cells_ok keysKept_ok) keys_ok)
+            (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ itemInc_ok))))
+          framesKept_ok)
+        frames_ok)
       inputs_ok)
-    (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ partInc_ok)))
+    (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ (whole_lift_ok _ partInc_ok))))
 
 /-- How far the lines' top is above the window's top. -/
 def offset (m : Model) : Int := (m.scroll : Int) - Model.margin
@@ -209,7 +231,9 @@ abbrev Lines : EditStructure := prod (latest Model) (runs (Lists.editStructure (
 /-- The parts' lines, joined: where a part was laid out again, only the
 lines that differ from what they were are edits. -/
 def lines : Cached Laid Lines :=
-  Cached.second (Lists.flatChange rowsOf Display.Block.same Display.Block.same_refl fun a b => decide (a = b))
+  Cached.second
+    (Lists.flatChange (cb := whole (plain Display.Block)) rowsOf Display.Block.same Display.Block.same_refl
+      fun a b => decide (a = b))
 
 theorem lines_ok : lines.ok :=
   Cached.second_ok _ (Lists.flatChange_ok _ _ _ _ Display.Block.same_sound fun _ _ h => of_decide_eq_true h)
@@ -238,8 +262,7 @@ theorem rowsLayer_ok : rowsLayer.ok :=
 
 /-- Where the caret is: its line and column. -/
 def caretAt (l : Model.Layout) : Option (Nat × Nat) :=
-  (List.range l.blocks.length).findSome? fun b =>
-    let block := l.blocks[b]!
+  l.blocks.zipIdx.findSome? fun (block, b) =>
     if block.selection.isNone then none
     else (List.range block.lines.size).findSome? fun i =>
       (block.lines[i]!.toList.find? (·.face == .caret)).map fun s => (l.lineOf b + i, s.col)
@@ -294,8 +317,9 @@ def laidOf (c : view.Cache) : Model × List Display.Block :=
 only the parts whose inputs differ are laid out. -/
 def relaid (c : view.Cache) (m : Model) : Model.Layout :=
   let kept : layout.Cache × (rowsLayer.Cache × ((Model × List Display.Block) × Nat)) := c
-  let made : (Model × List (Lists.Edit.of (plain Display.Block))) × layout.Cache := layout.df kept.1 [.replace m]
-  ⟨Lists.patch (plain Display.Block) made.1.2 kept.2.2.1.2⟩
+  let made : (Model × List (Lists.Edit.of (whole (plain Display.Block)))) × layout.Cache :=
+    layout.df kept.1 [.replace m]
+  ⟨Lists.patch (whole (plain Display.Block)) made.1.2 kept.2.2.1.2⟩
 
 /-- What the view keeps for a model is the model and its layout. -/
 theorem laidOf_view (m : Model) : laidOf (view.f m).2 = (m, Display.blocks m.doc m.seen) := rfl

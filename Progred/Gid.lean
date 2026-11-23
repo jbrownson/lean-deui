@@ -163,6 +163,14 @@ end
 
 instance : DecidableEq Value := fun a b => withPtrEqDecEq a b (fun _ => Value.decEq a b)
 
+/-- Whether two values are equal: at once if they're the one object. -/
+def equal {α : Type} [DecidableEq α] (a b : α) : Bool :=
+  withPtrEq a b (fun _ => decide (a = b)) (by intro h; simp [h])
+
+theorem equal_refl {α : Type} [DecidableEq α] (a : α) : equal a a = true := decide_eq_true rfl
+
+theorem equal_sound {α : Type} [DecidableEq α] (a b : α) (h : equal a b = true) : a = b := of_decide_eq_true h
+
 /-- A value that's compared as one object first: two that are the same
 object are equal without being looked into. For what's held and passed
 along unchanged. -/

@@ -55,7 +55,12 @@ def main (args : List String) : IO Unit := do
         let _ ← timed "the wheel, 3000 times" m ((List.replicate 1500 (.scroll 0 0 0 (-1))) ++ List.replicate 1500 (.scroll 0 0 0 1))
         return
       let m ← timed "an arrow key" m (List.replicate 20 (key 63233))
+      if args.contains "arrow" then
+        let _ ← timed "an arrow key, 1000 times" m ((List.replicate 500 (key 63233)) ++ List.replicate 500 (key 63232))
+        return
       let m ← timed "the wheel, with something selected" m (List.replicate 20 (.scroll 0 0 0 (-1)))
       let m ← timed "a new entry, typed" m ([key 13] ++ ("\"some words".toList.map fun c => .text c.toString) ++ [key 13])
       let m ← timed "typing in it" m ("and more".toList.map fun c => App.Event.text c.toString)
+      let m ← timed "a function added" m [key 13, .text "l", .text "a", .text "m", key 13]
+      let m ← timed "typing in its definition" m ("named".toList.map fun c => App.Event.text c.toString)
       if !(m.shown.1 == (Editor.view.f m.state).1) then IO.println "  !! the scene kept isn't the model's view"

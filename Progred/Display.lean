@@ -804,32 +804,41 @@ structure Seen where
 /-- The path of the root notebook's entries. -/
 def entriesPath : Path := [.key Kinds.entries]
 
-/-- The parts' inputs: one for each entry, in order, with the hole of an
-entry being added among them, and no place to add an entry beside the hole;
-or one for the whole root. -/
-def assemble (items : List Item) (c : Seen) : List Input :=
+/-- The entry being added, if the selection is pending among the root
+notebook's entries: where it would go. -/
+def pendingEntry (selection : Option Selection) : Option Position :=
+  match selection with
+  | some sel =>
+    if sel.stage == .pending && sel.path.dropLast == entriesPath then
+      match sel.path.getLast? with
+      | some (.element p) => some p
+      | _ => none
+    else none
+  | none => none
+
+/-- A part before the editor's state reaches it: what it's of, and what it
+reaches. The parts are a function of the document and of where an entry is
+being added, and of nothing else the editor's state holds. -/
+structure Frame where
+  shape : Shape
+  cells : Shared (List (CellId × Value))
+  expressions : List Value
+  functions : Bool
+  deriving DecidableEq
+
+/-- The parts: one for each entry, in order, with the hole of an entry
+being added among them, and no place to add an entry beside the hole; or
+one for the whole root. -/
+def frames (items : List Item) (pending : Option Position) : List Frame :=
   match items with
-  | [.whole root cells expressions functions] =>
-    [{ shape := .whole root, cells, selection := c.selection, folds := c.folds,
-       results := c.results.filter fun r => expressions.contains r.1,
-       layouts := if functions then c.layouts else ⟨[]⟩,
-       marked := c.marked, ribbon := c.ribbon }]
+  | [.whole root cells expressions functions] => [⟨.whole root, cells, expressions, functions⟩]
   | _ =>
     -- The root notebook's entries: an item that isn't one is no entry.
     let items : List (Position × Value × Shared (List (CellId × Value)) × List Value × Bool) :=
       items.filterMap fun
         | .entry p v reached expressions functions => some (p, v, reached, expressions, functions)
         | .whole .. => none
-    -- The entry being added, if the selection is pending among the entries.
-    let pending : Option Position :=
-      match c.selection with
-      | some sel =>
-        if sel.stage == .pending && sel.path.dropLast == entriesPath then
-          match sel.path.getLast? with
-          | some (.element p) => if items.any (·.1 == p) then none else some p
-          | _ => none
-        else none
-      | none => none
+    let pending := pending.filter fun p => !items.any (·.1 == p)
     let all : List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) :=
       match pending with
       | some p =>
@@ -838,32 +847,104 @@ def assemble (items : List Item) (c : Seen) : List Input :=
       | none => items.map fun i => (i.1, some i.2)
     let at_ (p : Position) : Path := entriesPath ++ [.element p]
     let rec go (number : Nat) (prev : Option (Position × Bool)) :
-        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) → List Input
+        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) → List Frame
       | [] => []
       | (p, item) :: rest =>
         let beside := item.isNone || (prev.map (·.2)).getD false
         let before := if beside then none else some (at_ (Position.between (prev.map (·.1)) (some p)))
         let after := if rest.isEmpty && item.isSome then some (at_ (Position.between (some p) none)) else none
-        let path := at_ p
-        let touches (q : Path) : Bool := path.isPrefixOf q || q.isPrefixOf path
-        let cells : Shared (List (CellId × Value)) := (item.map (·.2.1)).getD ⟨[]⟩
-        let expressions := (item.map (·.2.2.1)).getD []
-        let functions := (item.map (·.2.2.2)).getD false
-        { shape := .entry number path (item.map (·.1)) before after, cells,
-          selection := c.selection.filter fun sel => touches sel.path,
-          folds := c.folds.filter fun f => path.isPrefixOf f.1,
-          results := c.results.filter fun r => expressions.contains r.1,
-          layouts := if functions then c.layouts else ⟨[]⟩,
-          marked := c.marked.filter fun cell => !c.markedDefined || cells.val.any (·.1 == cell),
-          ribbon := c.ribbon } :: go (number + 1) (some (p, item.isNone)) rest
-    if all.isEmpty then
-      [{ shape := .empty (at_ (Position.between none none)), cells := ⟨[]⟩, selection := none, folds := [],
-         results := [], layouts := ⟨[]⟩, marked := none, ribbon := c.ribbon }]
+        { shape := .entry number (at_ p) (item.map (·.1)) before after,
+          cells := (item.map (·.2.1)).getD ⟨[]⟩,
+          expressions := (item.map (·.2.2.1)).getD [],
+          functions := (item.map (·.2.2.2)).getD false } :: go (number + 1) (some (p, item.isNone)) rest
+    if all.isEmpty then [⟨.empty (at_ (Position.between none none)), ⟨[]⟩, [], false⟩]
     else go 1 none all
+
+namespace Frame
+
+/-- Whether a path is in a part, or the part in it. -/
+def touches (f : Frame) (q : Path) : Bool :=
+  match f.shape with
+  | .whole _ => true
+  | .entry _ path _ _ _ => path.isPrefixOf q || q.isPrefixOf path
+  | .empty _ => false
+
+/-- What of each thing the editor's state holds a part is drawn with: the
+selection if it's in the part, the folds in it, the results of its
+evaluations, what functions gave if it has kinds they draw, and the
+selected cell if it reaches it. -/
+def selection (f : Frame) (s : Option Selection) : Option Selection := s.filter fun sel => f.touches sel.path
+
+def folds (f : Frame) (fs : List (Path × Bool)) : List (Path × Bool) :=
+  match f.shape with
+  | .whole _ => fs
+  | .entry _ path _ _ _ => fs.filter fun fold => path.isPrefixOf fold.1
+  | .empty _ => []
+
+def results (f : Frame) (rs : List (Value × Outcome)) : List (Value × Outcome) :=
+  if f.expressions.isEmpty then [] else rs.filter fun r => f.expressions.contains r.1
+
+def layouts (f : Frame) (ls : Shared (List (Value × Value × Value))) : Shared (List (Value × Value × Value)) :=
+  if f.functions then ls else ⟨[]⟩
+
+def marked (f : Frame) (m : Option CellId × Bool) : Option CellId :=
+  match f.shape with
+  | .whole _ => m.1
+  | .entry _ _ _ _ _ => m.1.filter fun cell => !m.2 || f.cells.val.any (·.1 == cell)
+  | .empty _ => none
+
+end Frame
+
+/-- A part's input: the part, with what of the editor's state it's drawn
+with. -/
+def input (c : Seen) (f : Frame) : Input :=
+  { shape := f.shape, cells := f.cells, selection := f.selection c.selection, folds := f.folds c.folds,
+    results := f.results c.results, layouts := f.layouts c.layouts, marked := f.marked (c.marked, c.markedDefined),
+    ribbon := c.ribbon }
+
+/-- Whether one thing a part is drawn with differs, between two states:
+not if the two hold the same thing, nor if what the part takes of each is
+the same. -/
+def differs {α β : Type} [DecidableEq α] [DecidableEq β] (g : α → β) (a a' : α) : Bool :=
+  !(equal a a' || decide (g a = g a'))
+
+theorem same_of_not_differs {α β : Type} [DecidableEq α] [DecidableEq β] (g : α → β) (a a' : α)
+    (h : differs g a a' = false) : g a = g a' := by
+  simp only [differs, Bool.not_eq_false', Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h with h | h
+  · rw [equal_sound a a' h]
+  · exact h
+
+/-- Whether a change of the editor's state, from `c` to `c'`, touches a
+part: whether anything the part is drawn with differs. A selection that
+moves touches the parts it leaves and enters, and no other. -/
+def touched (c c' : Seen) (f : Frame) : Bool :=
+  c.ribbon != c'.ribbon || differs f.selection c.selection c'.selection || differs f.folds c.folds c'.folds ||
+    differs f.results c.results c'.results || differs f.layouts c.layouts c'.layouts ||
+    differs f.marked (c.marked, c.markedDefined) (c'.marked, c'.markedDefined)
+
+/-- Whether a change of the editor's state leaves all the parts are drawn
+with as it was: then no part is touched, and none is asked. -/
+def still (c c' : Seen) : Bool :=
+  c.ribbon == c'.ribbon && equal c.selection c'.selection && equal c.folds c'.folds &&
+    equal c.results c'.results && equal c.layouts c'.layouts &&
+    decide ((c.marked, c.markedDefined) = (c'.marked, c'.markedDefined))
+
+theorem not_touched_of_still (c c' : Seen) (h : still c c' = true) (f : Frame) : touched c c' f = false := by
+  simp only [still, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
+  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hm⟩ := h
+  simp [touched, differs, hr, hs, hf, hres, hl, hm, equal_refl]
+
+/-- A part that a change doesn't touch has the input it had. -/
+theorem input_of_not_touched (c c' : Seen) (f : Frame) (h : touched c c' f = false) : input c' f = input c f := by
+  simp only [touched, Bool.or_eq_false_iff, bne_eq_false_iff_eq] at h
+  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hm⟩ := h
+  simp only [input, hr, same_of_not_differs _ _ _ hs, same_of_not_differs _ _ _ hf,
+    same_of_not_differs _ _ _ hres, same_of_not_differs _ _ _ hl, same_of_not_differs _ _ _ hm]
 
 /-- A document's parts, laid out: all of it, worked out from nothing. -/
 def blocks (d : Document) (c : Seen) : List Block :=
-  (assemble ((itemKeys d.root (Cells.of d)).map item) c).map part
+  ((frames ((itemKeys d.root (Cells.of d)).map item) (pendingEntry c.selection)).map (input c)).map part
 
 end Display
 

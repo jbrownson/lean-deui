@@ -108,55 +108,56 @@ theorem flat_inc_ok : (flat.inc f).ok := lift_ok _ (flat_one_ok f)
 
 /-! ## Joining, by what changed -/
 
-variable (sameB : B → B → Bool) (reflB : ∀ b, sameB b b = true) (sameA : A → A → Bool)
+section
+variable {cb : EditStructure} {A : Type} (f : cb.Value → List A)
+variable (sameB : cb.Value → cb.Value → Bool) (reflB : ∀ b, sameB b b = true) (sameA : A → A → Bool)
 
 /-- The edits to the joined list for a run of edits to the elements, from
 the elements before it, and the elements after. The elements that changed
 are found by comparing the lists, and their joined lists compared in turn:
 an element replaced by one whose list is mostly the same makes edits only
 where the lists differ, and no element changed is no work. -/
-def flatChange.df (xss : List B) (es : List (Edit.of (plain B))) : List (Edit.of (plain A)) × List B :=
-  let yss := patch (plain B) es xss
+def flatChange.df (xss : List cb.Value) (es : List (Edit.of cb)) : List (Edit.of (plain A)) × List cb.Value :=
+  let yss := patch cb es xss
   if alike sameB reflB xss yss then ([], yss)
   else
     let r := frame sameB xss yss
     (changeAt (plain A) sameA (r.1.map fun b => (f b).length).sum (r.2.1.flatMap f) (r.2.2.1.flatMap f), yss)
 
 /-- Joining, with a derivative that compares: it keeps the elements. -/
-def flatChange : Cached (runs (editStructure (plain B))) (runs (editStructure (plain A))) :=
-  ⟨List B, fun xss => (xss.flatMap f, xss), flatChange.df f sameB reflB sameA⟩
+def flatChange : Cached (runs (editStructure cb)) (runs (editStructure (plain A))) :=
+  ⟨List cb.Value, fun xss => (xss.flatMap f, xss), flatChange.df f sameB reflB sameA⟩
 
 theorem flatChange_df (soundB : ∀ a b, sameB a b = true → a = b) (soundA : ∀ a b, sameA a b = true → a = b)
-    (xss : List B) (es : List (Edit.of (plain B))) :
+    (xss : List cb.Value) (es : List (Edit.of cb)) :
     patch (plain A) (flatChange.df f sameB reflB sameA xss es).1 (xss.flatMap f) =
-        (patch (plain B) es xss).flatMap f ∧
-      (flatChange.df f sameB reflB sameA xss es).2 = patch (plain B) es xss := by
-  obtain ⟨fx, fy⟩ := frame_ok sameB soundB xss (patch (plain B) es xss)
-  have hx : xss.flatMap f = (frame sameB xss (patch (plain B) es xss)).1.flatMap f ++
-      (frame sameB xss (patch (plain B) es xss)).2.1.flatMap f ++
-      (frame sameB xss (patch (plain B) es xss)).2.2.2.flatMap f := by
+        (patch cb es xss).flatMap f ∧
+      (flatChange.df f sameB reflB sameA xss es).2 = patch cb es xss := by
+  obtain ⟨fx, fy⟩ := frame_ok sameB soundB xss (patch cb es xss)
+  have hx : xss.flatMap f = (frame sameB xss (patch cb es xss)).1.flatMap f ++
+      (frame sameB xss (patch cb es xss)).2.1.flatMap f ++
+      (frame sameB xss (patch cb es xss)).2.2.2.flatMap f := by
     conv => lhs; rw [fx]
     rw [List.flatMap_append, List.flatMap_append]
-  have hy : (patch (plain B) es xss).flatMap f = (frame sameB xss (patch (plain B) es xss)).1.flatMap f ++
-      (frame sameB xss (patch (plain B) es xss)).2.2.1.flatMap f ++
-      (frame sameB xss (patch (plain B) es xss)).2.2.2.flatMap f := by
+  have hy : (patch cb es xss).flatMap f = (frame sameB xss (patch cb es xss)).1.flatMap f ++
+      (frame sameB xss (patch cb es xss)).2.2.1.flatMap f ++
+      (frame sameB xss (patch cb es xss)).2.2.2.flatMap f := by
     conv => lhs; rw [fy]
     rw [List.flatMap_append, List.flatMap_append]
-  have hl : ((frame sameB xss (patch (plain B) es xss)).1.map fun b => (f b).length).sum =
-      ((frame sameB xss (patch (plain B) es xss)).1.flatMap f).length := by
+  have hl : ((frame sameB xss (patch cb es xss)).1.map fun b => (f b).length).sum =
+      ((frame sameB xss (patch cb es xss)).1.flatMap f).length := by
     rw [List.length_flatMap]
-  by_cases hc : alike sameB reflB xss (patch (plain B) es xss) = true
-  · have e : flatChange.df f sameB reflB sameA xss es = ([], patch (plain B) es xss) := by
+  by_cases hc : alike sameB reflB xss (patch cb es xss) = true
+  · have e : flatChange.df f sameB reflB sameA xss es = ([], patch cb es xss) := by
       simp only [flatChange.df, hc, ite_true]
-      rfl
     rw [e]
     refine ⟨?_, rfl⟩
-    show xss.flatMap f = (patch (plain B) es xss).flatMap f
+    show xss.flatMap f = (patch cb es xss).flatMap f
     exact congrArg (List.flatMap f) (alike_sound sameB reflB soundB _ _ hc)
   · have e : flatChange.df f sameB reflB sameA xss es =
-        (changeAt (plain A) sameA ((frame sameB xss (patch (plain B) es xss)).1.map fun b => (f b).length).sum
-          ((frame sameB xss (patch (plain B) es xss)).2.1.flatMap f)
-          ((frame sameB xss (patch (plain B) es xss)).2.2.1.flatMap f), patch (plain B) es xss) := by
+        (changeAt (plain A) sameA ((frame sameB xss (patch cb es xss)).1.map fun b => (f b).length).sum
+          ((frame sameB xss (patch cb es xss)).2.1.flatMap f)
+          ((frame sameB xss (patch cb es xss)).2.2.1.flatMap f), patch cb es xss) := by
       simp only [flatChange.df, hc]
       rfl
     rw [e]
@@ -167,5 +168,7 @@ theorem flatChange_ok (soundB : ∀ a b, sameB a b = true → a = b) (soundA : �
   intro xss es
   obtain ⟨h1, h2⟩ := flatChange_df f sameB reflB sameA soundB soundA xss es
   exact Prod.ext h1 h2
+
+end
 
 end Deui.Lists

@@ -35,6 +35,20 @@ theorem second_ok (g : Cached cb cc) (h : g.ok) : (second (ca := ca) g).ok := by
     ((ca.apply d.1 a.1, (g.f (cb.apply d.2 a.2)).1), (g.f (cb.apply d.2 a.2)).2)
   rw [← e]
 
+/-- `g`, with something of the first of the pair carried beside its result. -/
+def carrying {D : Type} (h : ca.Value → D) (g : Cached (prod ca cb) cc) : Cached (prod ca cb) (prod (latest D) cc) where
+  Cache := ca.Value × g.Cache
+  f a := ((h a.1, (g.f a).1), (a.1, (g.f a).2))
+  df k d := ((h (ca.apply d.1 k.1), (g.df k.2 d).1), (ca.apply d.1 k.1, (g.df k.2 d).2))
+
+theorem carrying_ok {D : Type} (h : ca.Value → D) (g : Cached (prod ca cb) cc) (hg : g.ok) :
+    (carrying h g).ok := by
+  intro a d
+  have e := hg a d
+  show ((h (ca.apply d.1 a.1), cc.apply (g.df (g.f a).2 d).1 (g.f a).1), (ca.apply d.1 a.1, (g.df (g.f a).2 d).2)) =
+    ((h (ca.apply d.1 a.1), (g.f ((prod ca cb).apply d a)).1), (ca.apply d.1 a.1, (g.f ((prod ca cb).apply d a)).2))
+  rw [← e]
+
 /-- `g`'s derivative for a run of edits: each edit's run, joined, the cache
 passed from one to the next. -/
 def runsDf (g : Cached ca (runs cb)) : g.Cache → List ca.Edit → List cb.Edit × g.Cache

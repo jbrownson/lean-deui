@@ -172,8 +172,7 @@ def select (m : Model) (o : Occ) : Model :=
 /-- Where the selection is drawn: its part, and its stop there. -/
 def Layout.here (l : Layout) (m : Model) : Option (Nat × Nat) :=
   m.selection.bind fun sel =>
-    (List.range l.blocks.length).findSome? fun b =>
-      let block := l.blocks[b]!
+    l.blocks.zipIdx.findSome? fun (block, b) =>
       if block.selection.isNone then none
       else (block.stops.findIdx? fun s => isSelected sel block.occs[s.occ]!).map (b, ·)
 
@@ -191,14 +190,14 @@ def Layout.next (l : Layout) (from_ : Option (Nat × Nat)) (forward : Bool) (wan
       if keep i && want block.occs[s.occ]!.kind then some s else none
   let pick (block : Block) (stops : List Stop) : Option (Block × Stop) :=
     (if forward then stops.head? else stops.getLast?).map (block, ·)
-  let others (blocks : List Nat) : Option (Block × Stop) :=
-    blocks.findSome? fun b => pick l.blocks[b]! (wanted l.blocks[b]! fun _ => true)
-  let all := List.range l.blocks.length
+  -- The first of the parts that has one, in the order they're given.
+  let others (blocks : List Block) : Option (Block × Stop) :=
+    blocks.findSome? fun block => pick block (wanted block fun _ => true)
   match from_ with
   | some (b, i) =>
-    (pick l.blocks[b]! (wanted l.blocks[b]! fun j => if forward then j > i else j < i)).orElse fun _ =>
-      others (if forward then all.filter (· > b) else (all.filter (· < b)).reverse)
-  | none => others (if forward then all else all.reverse)
+    ((l.blocks[b]?).bind fun block => pick block (wanted block fun j => if forward then j > i else j < i)).orElse
+      fun _ => others (if forward then l.blocks.drop (b + 1) else (l.blocks.take b).reverse)
+  | none => others (if forward then l.blocks else l.blocks.reverse)
 
 /-- The selection moved to the next or previous thing drawn. -/
 def step (laid : Model → Layout) (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Model :=
@@ -214,30 +213,32 @@ def stepLine (laid : Model → Layout) (m : Model) (down : Bool) : Model :=
   match l.here m with
   | none => m.step laid true
   | some (b, i) =>
-    let here := l.blocks[b]!.stops[i]!
-    -- The places of a part, and whether each is past the line left.
-    let places (block : Block) (keep : Stop → Bool) : List Stop :=
-      block.stops.toList.filter fun s => isPlace block.occs[s.occ]!.kind && keep s
-    let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
-    let nearest (block : Block) (stops : List Stop) : Option (Block × Stop) :=
-      ((if down then stops.head? else stops.getLast?).map fun near =>
-        (stops.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near).map
-        (block, ·)
-    let all := List.range l.blocks.length
-    let target :=
-      (nearest l.blocks[b]! (places l.blocks[b]! fun s => if down then s.line > here.line else s.line < here.line)).orElse
-        fun _ => (if down then all.filter (· > b) else (all.filter (· < b)).reverse).findSome? fun b' =>
-          nearest l.blocks[b']! (places l.blocks[b']! fun _ => true)
-    match target with
-    | some (block, s) => m.select block.occs[s.occ]!
+    match l.blocks[b]? with
     | none => m
+    | some block =>
+      let here := block.stops[i]!
+      -- The places of a part, among those `keep` accepts.
+      let places (block : Block) (keep : Stop → Bool) : List Stop :=
+        block.stops.toList.filter fun s => isPlace block.occs[s.occ]!.kind && keep s
+      let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
+      let nearest (block : Block) (stops : List Stop) : Option (Block × Stop) :=
+        ((if down then stops.head? else stops.getLast?).map fun near =>
+          (stops.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near).map
+          (block, ·)
+      let target :=
+        (nearest block (places block fun s => if down then s.line > here.line else s.line < here.line)).orElse
+          fun _ => (if down then l.blocks.drop (b + 1) else (l.blocks.take b).reverse).findSome? fun other =>
+            nearest other (places other fun _ => true)
+      match target with
+      | some (block, s) => m.select block.occs[s.occ]!
+      | none => m
 
 /-- The scroll that keeps the selection's line in the window. -/
 def revealed (l : Layout) (m : Model) : Model :=
   match l.here m with
   | none => m
   | some (b, i) =>
-    let top := (l.lineOf b + l.blocks[b]!.stops[i]!.line) * lineHeight
+    let top := (l.lineOf b + ((l.blocks[b]?).map (·.stops[i]!.line)).getD 0) * lineHeight
     let room := m.height - 2 * margin
     if top < m.scroll then { m with scroll := top }
     else if top + lineHeight > m.scroll + room then { m with scroll := top + lineHeight - room }
