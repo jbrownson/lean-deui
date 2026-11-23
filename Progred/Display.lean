@@ -251,9 +251,10 @@ partial def cell (path : Path) (c : CellId) (plain : Bool) : M Doc := do
       | some k => return .row [delim "(", t (s.doc.shown s.library k) .name, dim (" " ++ c.short), delim ")"]
       | none => return dim c.short
 
-/-- A list's elements, with a place to insert before each and after the
-last, and the hole of an element being added. -/
-partial def elements (path : Path) (items : List (Position × Value)) : M (List Doc) := do
+/-- A list's elements, each drawn by `draw`, with a place to insert before
+each and after the last, and the hole of an element being added. -/
+partial def elements (path : Path) (items : List (Position × Value)) (draw : Path → Option Value → M Doc) :
+    M (List Doc) := do
   -- The element being added, if the selection is pending in this list.
   let pending : Option Position :=
     match s.selection with
@@ -282,7 +283,7 @@ partial def elements (path : Path) (items : List (Position × Value)) : M (List 
       let none_ := Doc.row []
       let beside := v.isNone || (prev.map (·.2)).getD false
       let point ← if beside then pure none_ else insertion (prev.map (·.1)) (some p)
-      let item ← value (path ++ [.element p]) v
+      let item ← draw (path ++ [.element p]) v
       let last ← if rest.isEmpty && v.isSome then insertion (some p) none else pure none_
       return .row [point, item, last] :: (← go (some (p, v.isNone)) rest)
   if all.isEmpty then return [← insertion none none]
@@ -291,7 +292,7 @@ partial def elements (path : Path) (items : List (Position × Value)) : M (List 
     go none all
 
 partial def list (path : Path) (items : List (Position × Value)) : M Doc := do
-  let parts ← elements path items
+  let parts ← elements path items value
   return container "[" "]" parts parts
 
 /-- A field: its label, then its value beside it, or below it indented. -/
@@ -368,7 +369,7 @@ partial def notebook (path : Path) (v : Value) : M Doc := do
   let at_ := path ++ [.key Kinds.entries]
   match v.field? Kinds.entries with
   | some (.list items) =>
-    let parts ← elements at_ items
+    let parts ← elements at_ items value
     let numbered := (List.range parts.length).zip parts |>.map fun (i, d) =>
       Doc.row [dim (toString (i + 1) ++ (if i < 9 then "  " else " ")), d]
     return .col (Doc.sep (t "") numbered)
@@ -380,7 +381,7 @@ partial def section_ (path : Path) (v : Value) : M Doc := do
   let at_ := path ++ [.key Kinds.sectionBody]
   match v.field? Kinds.sectionBody with
   | some (.list items) =>
-    return .col [head, .indent 2 (.col (← elements at_ items))]
+    return .col [head, .indent 2 (.col (← elements at_ items value))]
   | other => return .col [head, .indent 2 (← value at_ other)]
 
 /-- An evaluation: its expression, then what it gives. -/
@@ -403,13 +404,39 @@ partial def evaluation (path : Path) (v : Value) : M Doc := do
   let stacked := Doc.col [expression, .indent 2 (.row [dim "→ ", marked])]
   return .alt flat stacked
 
-/-- A lambda: `name [params] → body`. -/
+/-- A parameter: its name, and its type if it has one, or one is being
+given. -/
+partial def param (path : Path) (v : Option Value) : M Doc := do
+  match v, editingAt s path .edge with
+  | some (.cell c), none =>
+    modify fun st => { st with inPlain := false }
+    let typePath := path ++ [.follow, .key Kinds.type_]
+    let type := (s.doc.lookup? s.library c).bind (·.field? Kinds.type_)
+    let typed ← if type.isSome || pendingAt s typePath then pure [dim ": ", ← value typePath type] else pure []
+    occ path .value (.row (t (s.doc.shown s.library c) .name :: typed)) (some c)
+  | _, _ => value path v
+
+/-- A lambda: `name [params] → body`, with what it returns after the
+parameters if it says, or is being told. -/
 partial def lambda (path : Path) (v : Value) : M Doc := do
   let name ← nameOf path v "λ"
-  let params ← value (path ++ [.key Kinds.params]) (v.field? Kinds.params)
+  let paramsPath := path ++ [.key Kinds.params]
+  let params ← match v.field? Kinds.params with
+    | some (.list items) =>
+      if (editingAt s paramsPath .edge).isSome then value paramsPath (v.field? Kinds.params)
+      else
+        let parts ← elements paramsPath items param
+        occ paramsPath .value (container "[" "]" parts parts)
+    | other => value paramsPath other
+  let returnsPath := path ++ [.key Kinds.returns]
+  let returns ←
+    if (v.field? Kinds.returns).isSome || pendingAt s returnsPath then
+      pure [dim " : ", ← value returnsPath (v.field? Kinds.returns)]
+    else pure []
   let body ← value (path ++ [.key Kinds.body]) (v.field? Kinds.body)
-  let flat := Doc.row [name, t " ", params, dim " → ", body]
-  let stacked := Doc.col [.row [name, t " ", params, dim " →"], .indent 2 body]
+  let head := [name, t " ", params] ++ returns
+  let flat := Doc.row (head ++ [dim " → ", body])
+  let stacked := Doc.col [.row (head ++ [dim " →"]), .indent 2 body]
   return .alt flat stacked
 
 /-- A call: the function, then its arguments by parameter; a function

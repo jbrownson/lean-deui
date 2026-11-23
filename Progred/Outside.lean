@@ -1,5 +1,5 @@
 import Progred.Editor
-import Progred.Lean
+import Progred.Skinny
 
 /-!
 What reaches the editor from outside its pure update: fresh cell ids, what
@@ -41,8 +41,8 @@ unsafe def evaluate (rt : Run.Runtime) (memo : Memo) (m : Model) : IO (List (Val
   let known ← memo.get
   let mut results := []
   let mut kept := []
-  for e in ToLean.expressions m.doc do
-    match ToLean.convert m.doc m.library e with
+  for e in Skinny.expressions m.doc do
+    match Skinny.convert m.doc m.library e with
     | .error f => results := results ++ [(e, Outcome.failed f.message)]
     | .ok (commands, term, nodes) =>
       let key := String.join (commands.toList.map toString) ++ " ⊢ " ++ toString term

@@ -44,8 +44,12 @@ def evaluation := cell! "549dd85073474d6296d773c8df9c0526"
 def expression := cell! "ccc55b0eb63b9f564ea74436094d4014"
 
 /-- A function Lean supplies, which the document calls by its cell
-(`Progred/Lean.lean`): `{isa: lean function, name, params}`. New here. -/
+(`Progred/Skinny.lean`): `{isa: lean function, name, params}`. New here. -/
 def leanFunction := cell! "b8932235933f5a00e98a063a3ff6311d"
+/-- A parameter's type, on the parameter's definition, and what a lambda
+returns, on the lambda: Skinny expressions that are types. New here. -/
+def type_ := cell! "c66b9576e877d337b605e9dea35a2c11"
+def returns := cell! "6f67b36c0228799e333f2ec9e075a555"
 
 end Kinds
 

@@ -100,6 +100,10 @@ unsafe def main (args : List String) : IO Unit := do
     ("copy the first argument, and paste it as the second", key 63234 ++ key 63234 ++ key 'c'.toNat.toUInt32 2 ++ tab ++ key 'v'.toNat.toUInt32 2),
     ("up into the record; its 12 cut, and pasted as an entry after the record", up ++ key 'x'.toNat.toUInt32 2
       ++ enter ++ key 'v'.toNat.toUInt32 2)]
+  let steps := steps ++ [
+    ("a function that calls itself, with its types", script
+      "<enter> lam <enter> fact <enter> <tab> n <enter> : Nat <enter> <left> <left> : Nat <enter> <tab> if <enter> equ <enter> n <enter> <tab> 0 <enter> <tab> 1 <enter> <tab> mul <enter> n <enter> <tab> fact <enter> sub <enter> n <enter> <tab> 1 <enter>"),
+    ("and an evaluation of it", script "<up> <enter> eva <enter> fact <enter> 10 <enter>")]
   for (name, es) in steps do
     for e in es do
       m := App.step Editor.app m e

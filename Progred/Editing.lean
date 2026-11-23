@@ -168,10 +168,16 @@ def valueOffers (m : Model) (path : Path) (query : String) : List Offer :=
         fun m => match m.doc.set path (.cell c) with
           | some doc => (m.write doc).rest path
           | none => m⟩
-      if v.kind? == some Kinds.lambda || v.kind? == some Kinds.leanFunction then
+      -- A function with no parameters is a type: there's nothing to call.
+      let isType := ((Builtin.function? c).map (·.params.isEmpty)).getD false
+      if isType then [{ reference with detail := "type" }]
+      else if v.kind? == some Kinds.lambda || v.kind? == some Kinds.leanFunction then
         [⟨name, "call", false, fun m => m.put path (Value.ofKind Kinds.call [(Kinds.function, .cell c)])⟩, reference]
       else [reference]
-    let ranked (rank : Nat) := (makers ++ kinds ++ cells).filter fun o => matchRank query o.text == some rank
+    -- What's named exactly as typed comes first: a parameter `n` before `notebook`.
+    let exact := if query.isEmpty then [] else (cells ++ kinds ++ makers).filter (·.text == query)
+    let ranked (rank : Nat) := (makers ++ kinds ++ cells).filter fun o =>
+      matchRank query o.text == some rank && (query.isEmpty || o.text != query)
     -- A new cell with the query as its name: how a parameter is made.
     let named : List Offer :=
       if query.isEmpty then []
@@ -180,7 +186,11 @@ def valueOffers (m : Model) (path : Path) (query : String) : List Offer :=
         match m.doc.set path (.cell id) with
         | some doc => (m.write { doc with cells := doc.cells.insert id (Builtin.named query) }).rest path
         | none => m⟩]
-    readings ++ ranked 0 ++ ranked 1 ++ named ++ (if query.isEmpty then [] else [text query])
+    -- Among a lambda's parameters, what's typed is first a new parameter's name.
+    let inParams := path.dropLast.getLast? == some (.key Kinds.params)
+    (if inParams then named ++ exact ++ ranked 0 ++ ranked 1
+      else readings ++ exact ++ ranked 0 ++ ranked 1 ++ named) ++
+      (if query.isEmpty then [] else [text query])
 
 /-- The offers for a new field's label on the record at a path: its kind's
 fields it lacks, the document's cells that are only names, and a new label
@@ -286,9 +296,23 @@ def typed (m : Model) (c : Char) : Model :=
     | none =>
       match m.at? sel.path with
       | some v =>
+        -- A colon on a parameter is its type, and on a lambda, or its
+        -- parameters, what it returns: the place opens, or is selected.
+        let place (path : Path) : Model := if (m.at? path).isSome then m.rest path else m.openAt path
+        let lambdaAt (path : Path) : Bool := ((m.at? path).bind (·.kind?)) == some Kinds.lambda
+        let isParam := sel.path.dropLast.getLast? == some (.key Kinds.params)
         match v, c with
         | .cell id, ' ' => toggleFold m sel.path id
+        | .cell _, ':' =>
+          if isParam then place (sel.path ++ [.follow, .key Kinds.type_])
+          else if lambdaAt (sel.path ++ [.follow]) then place (sel.path ++ [.follow, .key Kinds.returns])
+          else m
+        | .list _, ':' =>
+          if sel.path.getLast? == some (.key Kinds.params) && lambdaAt sel.path.dropLast then
+            place (sel.path.dropLast ++ [.key Kinds.returns])
+          else m
         | _, _ =>
+          if c == ':' && lambdaAt sel.path then place (sel.path ++ [.key Kinds.returns]) else
           if !m.doc.writable m.library sel.path then m
           else match lineOf v with
             | some text =>

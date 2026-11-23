@@ -13,7 +13,7 @@ open Progred
 
 /-- A function Lean supplies: its cell, name, parameters, and the symbol it
 is written with between two arguments, if it has one. What it means is in
-`Progred/Lean.lean`. -/
+`Progred/Skinny.lean`. -/
 structure Function where
   id : CellId
   name : String
@@ -58,7 +58,19 @@ def functions : List Function := [
   ⟨cell! "9111cd7fd2e79bff65af8a17bd502b43", "range",
     [(cell! "bebdfe51128bddbdbb8fd42be24f28d8", "count")], none⟩,
   ⟨cell! "c8347cfca879562783d426f91328b1b8", "show",
-    [(cell! "1b0a5cf30adcf0547bf4c6f7efffeec8", "value")], none⟩]
+    [(cell! "1b0a5cf30adcf0547bf4c6f7efffeec8", "value")], none⟩,
+  ⟨cell! "8be94c0287981cd16f6d25f77b85e93c", "Nat", [], none⟩,
+  ⟨cell! "0d405b903c2338e928fff8e976d74621", "Int", [], none⟩,
+  ⟨cell! "4cfc5800e5940f5dea841a236f283576", "Float", [], none⟩,
+  ⟨cell! "f953a0df54162c0d6fdb690320968553", "Text", [], none⟩,
+  ⟨cell! "7ee4139cae4cf234fba954832c22a407", "Bool", [], none⟩,
+  ⟨cell! "c49f205d823111a4b541e0f0063b64d6", "List", [(cell! "59295ade0021750cc016eadbaec6ea5b", "of")], none⟩,
+  ⟨cell! "81b580321520669dd1221762362c250e", "Function",
+    [(cell! "1d7791fc69fd20edc9d50a4e4b447125", "from"), (cell! "50d7adfc82af458f8422c320398b9781", "to")], some "→"⟩]
+
+/-- Whether a function is a type, or makes one. -/
+def Function.isType (f : Function) : Bool :=
+  ["Nat", "Int", "Float", "Text", "Bool", "List", "Function"].contains f.name
 
 def function? (c : CellId) : Option Function := functions.find? (·.id == c)
 
@@ -89,7 +101,7 @@ def library : Library :=
     (Kinds.entries, named "entries"), (Kinds.sectionBody, named "body"),
     (Kinds.params, named "params"), (Kinds.body, named "body"), (Kinds.function, named "function"),
     (Kinds.value, named "value"), (Kinds.expression, named "expression"),
-    (Kinds.leanFunction, named "lean function"),
+    (Kinds.leanFunction, named "lean function"), (Kinds.type_, named "type"), (Kinds.returns, named "returns"),
     (Kinds.true_, Value.ofKind Kinds.valueWrapper
       [(Kinds.name, Value.text "true"), (Kinds.value, Value.literal Kinds.bool [1])]),
     (Kinds.false_, Value.ofKind Kinds.valueWrapper

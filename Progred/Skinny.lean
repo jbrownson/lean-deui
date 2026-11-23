@@ -4,17 +4,19 @@ import Progred.Display
 import Progred.Run
 
 /-!
-The document's expressions as Lean: a value becomes Lean `Syntax`, built
-with quotations, never text. A text, a number or a boolean is its literal;
+Skinny: the subset of Lean a document is written in. A value becomes Lean
+`Syntax`, built with quotations, never text. A text, a number or a boolean is its literal;
 a list is a list; a lambda is `fun`; a call applies its function to its
 arguments in its parameters' order; a cell that is a lambda's parameter is
 its variable; a cell defined as a lambda or a value wrapper is a
 definition, elaborated before what uses it; a function Lean supplies is
-its Lean. Each node is tagged with a number, so an error comes back at the
-value it's about.
+its Lean. A parameter may have a type and a lambda what it returns, which
+are expressions like any other; a definition that refers to itself needs
+them, and is a `partial def`. Each node is tagged with a number, so an
+error comes back at the value it's about.
 -/
 
-namespace Progred.ToLean
+namespace Progred.Skinny
 
 open Lean Progred
 
@@ -33,7 +35,10 @@ structure State where
   /-- The definitions needed, in the order they're elaborated. -/
   commands : Array Syntax := #[]
   defined : List CellId := []
+  /-- The definitions being made, innermost first, and those found to refer
+  to themselves. -/
   defining : List CellId := []
+  recursive : List CellId := []
 
 abbrev M := StateT State (ExceptT Failure Unhygienic)
 
@@ -67,6 +72,13 @@ def supplied (name : String) (args : Array Term) : M Term := do
   | "fold", #[f, s, l] => `((List.foldl $f $s $l))
   | "range", #[n] => `((List.range $n))
   | "show", #[v] => `((toString $v))
+  | "Nat", #[] => `(Nat)
+  | "Int", #[] => `(Int)
+  | "Float", #[] => `(Float)
+  | "Text", #[] => `(String)
+  | "Bool", #[] => `(Bool)
+  | "List", #[a] => `((List $a))
+  | "Function", #[a, b] => `(($a → $b))
   | _, _ => fail 0 s!"Lean has no function {name} of {args.size} arguments"
 
 variable (doc : Document) (lib : Library)
@@ -88,7 +100,13 @@ partial def term (bound : List CellId) (at_ : Where) (v : Value) : M Term := do
     | none => fail n s!"{doc.shown lib c} has no definition"
     | some d =>
       if d.kind? == some Kinds.lambda || d.kind? == some Kinds.valueWrapper then
-        define c d
+        let s ← get
+        if s.defining.head? == some c then
+          -- The definition being made, within itself.
+          modify fun s => { s with recursive := c :: s.recursive }
+        else if s.defining.contains c then
+          fail n s!"{doc.shown lib c} is defined by way of another definition that uses it, which isn't supported yet"
+        else define c d
         return tagged (ident "d_" c)
       else if d.kind? == some Kinds.leanFunction then
         -- A supplied function, as a value: a function of its parameters.
@@ -96,6 +114,7 @@ partial def term (bound : List CellId) (at_ : Where) (v : Value) : M Term := do
         | some f =>
           let params := f.params.map fun (p, _) => ident "p_" p
           let body ← supplied f.name (params.map fun (p : Ident) => (⟨p.raw⟩ : Term)).toArray
+          if params.isEmpty then return tagged body
           return tagged (← `(fun $(params.toArray)* => $body))
         | none => fail n s!"{doc.shown lib c} isn't a function Lean supplies"
       else
@@ -123,8 +142,17 @@ partial def term (bound : List CellId) (at_ : Where) (v : Value) : M Term := do
         | none => fail n "a lambda needs a body"
         | some b =>
           let body ← term (params ++ bound) (into at_ [.key Kinds.body]) b
+          let body ← match v.field? Kinds.returns with
+            | some r => do
+              let type ← term bound (into at_ [.key Kinds.returns]) r
+              `(($body : $type))
+            | none => pure body
           if params.isEmpty then return tagged body
-          return tagged (← `(fun $((params.map (ident "p_")).toArray)* => $body))
+          let binders ← params.mapM fun p => do
+            match ← paramType bound p with
+            | some type => `(Lean.Parser.Term.funBinder| ($(ident "p_" p) : $type))
+            | none => `(Lean.Parser.Term.funBinder| $(ident "p_" p):ident)
+          return tagged (← `(fun $(binders.toArray)* => $body))
       else if k == Kinds.call then call bound at_ n v
       else if k == Kinds.valueWrapper then
         match v.field? Kinds.value with
@@ -167,17 +195,37 @@ partial def call (bound : List CellId) (at_ : Where) (n : Nat) (v : Value) : M T
       let f ← term bound (into at_ [.key Kinds.function]) fn
       return tagged f
 
+/-- A parameter's type, if its definition gives one. -/
+partial def paramType (bound : List CellId) (p : CellId) : M (Option Term) := do
+  match (doc.lookup? lib p).bind (·.field? Kinds.type_) with
+  | some type => return some (← term bound none type)
+  | none => return none
+
 /-- A cell's definition as a Lean definition, elaborated once, before what
-uses it. -/
+uses it. One that refers to itself is a `partial def`, which needs its
+parameters' types and what it returns. -/
 partial def define (c : CellId) (d : Value) : M Unit := do
-  let s ← get
-  if s.defined.contains c then return
-  if s.defining.contains c then
-    fail 0 s!"{doc.shown lib c} is defined by way of itself, which isn't supported yet"
+  if (← get).defined.contains c then return
   modify fun s => { s with defining := c :: s.defining }
   let body ← term [] none d
-  let command ← `(command| def $(ident "d_" c) := $body)
-  modify fun s => { s with commands := s.commands.push command, defined := c :: s.defined }
+  let command ←
+    if (← get).recursive.contains c then
+      let params := cellsOf (d.field? Kinds.params)
+      let types ← params.mapM fun p => paramType [] p
+      let returns ← match d.field? Kinds.returns with
+        | some r => some <$> term [] none r
+        | none => pure none
+      match returns, d.field? Kinds.body, d.kind? == some Kinds.lambda && types.all (·.isSome) with
+      | some returns, some b, true =>
+        let inner ← term params none b
+        let binders ← (params.zip types).mapM fun (p, type) =>
+          `(Lean.Parser.Term.bracketedBinderF| ($(ident "p_" p) : $(type.getD ⟨.missing⟩)))
+        `(command| partial def $(ident "d_" c) $(binders.toArray)* : $returns := $inner)
+      | _, _, _ =>
+        fail 0 s!"{doc.shown lib c} refers to itself, so its parameters and what it returns need types"
+    else `(command| def $(ident "d_" c) := $body)
+  modify fun s =>
+    { s with commands := s.commands.push command, defined := c :: s.defined, defining := s.defining.erase c }
 
 end
 
@@ -192,4 +240,4 @@ def convert (expression : Value) : Except Failure (Array Syntax × Syntax × Arr
 def expressions : List Value :=
   ((doc.root.map Display.expressionsIn).getD [] ++ doc.cells.toList.flatMap fun (_, v) => Display.expressionsIn v).eraseDups
 
-end Progred.ToLean
+end Progred.Skinny

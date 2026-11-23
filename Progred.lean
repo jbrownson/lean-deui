@@ -9,4 +9,4 @@ import Progred.Editing
 import Progred.Editor
 import Progred.Axioms
 import Progred.Run
-import Progred.Lean
+import Progred.Skinny
