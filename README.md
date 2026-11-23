@@ -164,7 +164,8 @@ lake build                                   # checks every law
 lake build todo && .lake/build/bin/todo      # plays events through the to-do list
 lake build todo_window && .lake/build/bin/todo_window   # the to-do list in a window
 lake build todo_long && .lake/build/bin/todo_long       # with 10,000 items
-lake build progred && .lake/build/bin/progred notes.gid # Progred, on a file it makes or opens
+lake build progred && .lake/build/bin/progred examples/tour.gid # Progred, on a notebook that says what to try
+.lake/build/bin/progred notes.gid                       # or on a file it makes or opens
 lake build progred_play && .lake/build/bin/progred_play # plays keys through Progred, with no window
 .lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
 .lake/build/bin/progred examples/projections.gid        # kinds drawn by projections in the document

@@ -84,6 +84,10 @@ unsafe def main (args : List String) : IO Unit := do
   let mut m : M := App.start Editor.app { doc }
   if !args.isEmpty then
     for step in args do
+      -- A step that starts with `>` writes the document to the file named after it.
+      if step.startsWith ">" then
+        IO.FS.writeFile (step.drop 1).toString (GidText.write m.state.doc m.state.library)
+        continue
       for e in script step do
         m := App.step Editor.app m e
         m := (App.applied Editor.app m (← Outside.edits rt memo functions none clipboard m.state)).1

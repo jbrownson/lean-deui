@@ -1,0 +1,181 @@
+{
+  "binders": {
+    "Nat": 8be94c0287981cd16f6d25f77b85e93c,
+    "a": 558b23a7bb86b251e9510f6da7aab770,
+    "a_2": 3efad80789625401ff13e7ebb4073278,
+    "a_3": 64965964de931ab59e57d658d7cbb1d2,
+    "a_4": f872895549eae8966eac4e46304b15dd,
+    "add": 6f49af7620696d771b7a9d00550795aa,
+    "b": 42cec7db784ab28ee617b5479bc46b7f,
+    "b_2": e31588c22413a8762b8ca8447ee8a52a,
+    "b_3": 8c3a3aa08880dc6fa7e111a73a8af08f,
+    "b_4": 292c41a1c52e76eb5f04464b19b20dac,
+    "body": 986143866eda2e2fbf9ab8484357a0c9,
+    "bytes": fe06bf0459d2598aa29b30302e3b29b8,
+    "call": 8dd318828a4c42cf9f2d5d1ba9b068fe,
+    "condition": 05c1e64859ace06f98dbd9c21ebc18a6,
+    "count": bebdfe51128bddbdbb8fd42be24f28d8,
+    "double": d5905ac8593c160e6204f9cb131fd71b,
+    "else": dd4b95c3fd1396cd3eca153d02c91008,
+    "entries": 26b6e7f1fc0d482da89e2a4835d2f789,
+    "equals": 5a3d7f2620768e2f4091ea5a3c5945b9,
+    "evaluation": 549dd85073474d6296d773c8df9c0526,
+    "expression": ccc55b0eb63b9f564ea74436094d4014,
+    "fact": 2e43f1801addca37e99c69011797f2dc,
+    "function": 751fca4373debdd0b7e6eb73e08d684b,
+    "function_2": da3c469b81babc2555d0c2aaf69ec39e,
+    "if": 640c5b08f987c238366e77fee5743ebb,
+    "isa": dbd7e1a38e30425fb1b408b2e446bb1b,
+    "lambda": e4a0653134ca48379cab2e008bed03e7,
+    "list": a8a1c1760627334080e14cd7dce042f8,
+    "map": 141f511e9c2c741398dd28668cd91715,
+    "multiply": a5e0524516e0966327d76d7dfee47ee3,
+    "n": 7fbba20a85f170cdd7442264e93023eb,
+    "name": 02e562654d6d0828d3a7559e6f75fffe,
+    "notebook": 9111dde9a00f4106a817720187b45645,
+    "params": 195b378d0d31d90ab0d7366c15346b70,
+    "range": 9111cd7fd2e79bff65af8a17bd502b43,
+    "returns": 6f67b36c0228799e333f2ec9e075a555,
+    "subtract": 5c243e29c0dc824d2a78d8b46e5a42af,
+    "text": 332529b8ea83a7ba10fd7f6d942e5016,
+    "then": 1bbb65fdb0cd0cf0ca52394fb183c326,
+    "type": c66b9576e877d337b605e9dea35a2c11,
+    "u64": fc77282178c2fa31b80aed2b8b6f7888,
+    "x": 6ac7dd68686d33dc23ba8dd03feb9c5b,
+  },
+  "cells": {
+    double: {
+      name: "double",
+      params: [
+        0x80: x,
+      ],
+      body: {
+        a_3: x,
+        function: multiply,
+        b_3: {
+          isa: u64,
+          bytes: 0x0200000000000000,
+        },
+        isa: call,
+      },
+      isa: lambda,
+    },
+    fact: {
+      name: "fact",
+      params: [
+        0x80: n,
+      ],
+      returns: Nat,
+      body: {
+        condition: {
+          a_2: n,
+          function: equals,
+          isa: call,
+          b_2: {
+            isa: u64,
+            bytes: 0x0000000000000000,
+          },
+        },
+        then: {
+          isa: u64,
+          bytes: 0x0100000000000000,
+        },
+        function: if,
+        isa: call,
+        else: {
+          a_3: n,
+          function: multiply,
+          b_3: {
+            function: fact,
+            n: {
+              b_4: {
+                isa: u64,
+                bytes: 0x0100000000000000,
+              },
+              function: subtract,
+              isa: call,
+              a_4: n,
+            },
+            isa: call,
+          },
+          isa: call,
+        },
+      },
+      isa: lambda,
+    },
+    n: {
+      name: "n",
+      type: Nat,
+    },
+    x: {
+      name: "x",
+    },
+  },
+  "root": {
+    entries: [
+      0x80: "Progred, in Lean. Click anything to select it; the arrow keys move.",
+      0xc0: "Tab goes to the next place a value can go, and typing fills it.",
+      0xe0: "An evaluation: an expression, and what Lean gives. Click a number and type.",
+      0xf0: {
+        expression: {
+          b: {
+            isa: u64,
+            bytes: 0x0200000000000000,
+          },
+          a: {
+            isa: u64,
+            bytes: 0x0100000000000000,
+          },
+          function: add,
+          isa: call,
+        },
+        isa: evaluation,
+      },
+      0xf8: "A function: its name, its parameters, its body. Below it, two uses of it.",
+      0xfc: double,
+      0xfe: {
+        expression: {
+          x: {
+            isa: u64,
+            bytes: 0x1500000000000000,
+          },
+          function: double,
+          isa: call,
+        },
+        isa: evaluation,
+      },
+      0xff: {
+        expression: {
+          function: map,
+          list: {
+            function: range,
+            count: {
+              isa: u64,
+              bytes: 0x0500000000000000,
+            },
+            isa: call,
+          },
+          function_2: double,
+          isa: call,
+        },
+        isa: evaluation,
+      },
+      0xff80: "A function that calls itself says its types: type a colon on a parameter.",
+      0xffc0: fact,
+      0xffe0: {
+        expression: {
+          function: fact,
+          n: {
+            isa: u64,
+            bytes: 0x0a00000000000000,
+          },
+          isa: call,
+        },
+        isa: evaluation,
+      },
+      0xfff0: "Return adds an entry after this one. Then type eva, lam, or a quote mark, and Return.",
+      0xfff8: "Backspace deletes. Ctrl+Z undoes. Ctrl+C, X and V copy, cut and paste. Ctrl+S saves.",
+    ],
+    isa: notebook,
+  },
+}
