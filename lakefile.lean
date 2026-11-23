@@ -36,3 +36,8 @@ lean_exe todo_long where
   root := `Examples.TodoLong
   moreLinkObjs := #[libscreen]
   moreLinkArgs := #["-ldl"]
+
+/-- A spike: Lean built as data and run at run time. -/
+lean_exe spike where
+  root := `Spike.Runtime
+  supportInterpreter := true
