@@ -1,8 +1,8 @@
 # Progred in Lean: the port's notes
 
 Progred is a projectional editor ([jbrownson/progred](https://github.com/jbrownson/progred),
-in Rust). `Progred/` here is its core, in Lean, on deui, with a subset of Lean
-in place of its language Grap. This file records what the Rust version does
+in Rust). `Progred/` here is its core, in Lean, on deui, with Skinny, a subset
+of Lean, in place of its language Grap. This file records what the Rust version does
 (surveyed from its docs and code, November 2026) and what this port decides.
 The Rust paths are under `progred/` in that repository.
 
@@ -144,21 +144,57 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
 
 - **One repository for now.** `Progred` is a Lake library here that depends on
   `Deui`, never the reverse; it can move to its own repository.
-- **Lean in place of Grap.** A small functional subset, stored as GID in Grap's
-  shapes (`lambda`, `call`, `value wrapper`, `evaluation`), is turned into Lean
-  `Syntax` with quotations (`Progred/Lean.lean`), never text, elaborated into an
-  environment loaded at run time and run by Lean's interpreter
-  (`Progred/Run.lean`). A syntax node's position is the number of the value it
-  came from, so an error comes back at its node.
+- **Skinny in place of Grap.** A small functional subset of Lean, stored as GID
+  in Grap's shapes (`lambda`, `call`, `value wrapper`, `evaluation`), is turned
+  into Lean `Syntax` with quotations (`Progred/Skinny.lean`), never text,
+  elaborated into an environment loaded at run time and run by Lean's
+  interpreter (`Progred/Run.lean`). A syntax node's position is the number of
+  the value it came from, so an error comes back at its node.
+- **Types are expressions.** A parameter's `type` is on its definition and a
+  lambda's `returns` on the lambda; Nat, Int, Float, Text, Bool, List and
+  Function are in the library. They're optional, except that a lambda that
+  refers to itself needs them, and becomes a `partial def`: Lean wants a
+  recursive definition's type before its body, and without a proof that it
+  ends, `partial` is what runs.
+- **A projection is a layout, or a function that gives one.** A def's
+  `projection` is a Skinny expression. Where it's a layout as it stands, calls
+  of `row`, `column`, `indent`, `either`, `words`, `faint` and `part` with
+  nothing to work out, it's read as data and no code runs, as the Rust
+  version's templates are. Otherwise it's a function of the record: Lean runs
+  it on each record of the kind, outside the pure update, and what it gives,
+  a layout as a value, comes into the model as data (`Model.layouts`), as
+  evaluations' results do. So the view stays a pure function of the model, and
+  its derivative's law holds. `part` draws the record's own value at a field,
+  so it's edited where it's drawn; a field with no value is a hole. A
+  projection that fails leaves its records drawn as records.
+- **Skinny's prelude is this program's own code.** `Progred/Prelude.lean` is
+  built into the program and loaded, as the module the build made, into the
+  environment code is elaborated in. A function a document defines takes and
+  gives `Progred.Value`, with nothing converted between.
 - **Functions Lean supplies** are cells of the built-in library, each with its
   parameters as cells, since a call labels its arguments by them: add,
   subtract, multiply, divide, remainder, equals, less, and, or, not, if,
   append, length, map, filter, fold, range, show (`Progred/Builtin.lean`).
 - **Monospace text.** Layout is in characters: a doc chooses its inline or its
   stacked form against a ribbon, as the Rust layout's alternatives do.
-- **The view redraws.** The projection is recomputed on every event and the
-  screen's rows replaced (`Deui.Redraw`, proved correct), only the lines in the
-  window. Sharper derivatives come later, where a profile says.
+- **The view is a derivative.** The model is still replaced whole by an event,
+  and the view finds what that changed (`Progred/Editor.lean`): the document's
+  definitions are kept while they're the same; each entry of the root notebook
+  is worked out again (what it reaches, its evaluations) only where its value
+  or the definitions changed; each part's input is compared with what it was,
+  and a part is laid out only where it differs; the parts' lines are joined
+  and compared where a part was laid out again; the window shows the lines
+  that fit; and each line that changed is a row of the scene replaced. Every
+  step is one of deui's, proved, and `view_ok` is their laws composed. A
+  part's `Input` holds all its layout reads, the definitions it reaches
+  among them, which is what makes keeping its layout sound. Equality is
+  decided through `withPtrEqDecEq`: a value that's one object in both is
+  equal at once.
+- **Handlers read what the view keeps.** Navigation and clicks use the layout
+  the view kept for the model (`laidOf_view`), and where an edit needs the
+  layout of a model it's passing through, the same derivative gives it
+  (`relaid_view`). Scrolling to the selection follows an event's edits as
+  `settle`, since it needs the layout of the new model.
 - **Outside the pure update:** fresh cell ids, evaluations, the clipboard and
   saving are done by the window's loop after each batch of events and come
   back as edits (`Progred/Outside.lean`); an evaluation is remembered by the
@@ -204,24 +240,39 @@ the window was driven under Xvfb):
 - The language: literals, lists, lambdas, calls, named values, references, the
   supplied functions, evaluated by Lean, with the value and its type shown, or
   Lean's error, in the document's names, and the value it's about on red.
+  Types on parameters and results, and a function that calls itself
+  (`fact {n: 10} → 3628800 : Nat`).
+- Projections defined in the document: a def's `projection` as a layout, and
+  as a function of the record (`examples/projections.gid`), their parts edited
+  in place.
+- The view by derivative. `progred_measure`, on a notebook of 3,000 lines in
+  300 entries: the wheel about 15 µs, an arrow key 0.4 ms, a keystroke 0.3 ms,
+  against 15 ms to lay it out from nothing; at 30,000 lines in 3,000 entries,
+  0.13 ms, 3.8 ms and 4.9 ms against 167 ms.
 
 Not here yet:
 
 - Panes, and the Raw, Plain and All presets; hover; Cmd+click to pick a cell
   into a hole; number scrubbing; names made of parts.
-- Projections and offers defined in the document (a def's `projection` and a
-  field's `offers`); libraries as documents.
-- Definitions that refer to themselves; `match`, `let`, types, structures: the
-  subset is expressions, lambdas and calls.
+- Offers defined in the document (a field's `offers`); libraries as documents;
+  the Rust layout's other nodes (`center`, `rule`, `pad`, `border`, `drawing`,
+  `at`, `jump`, handlers); a place to see a projection's error, which goes to
+  the terminal; a projection's fields it doesn't draw, which aren't shown.
+- Definitions that refer to each other in a circle; `match`, `let`, structures:
+  Skinny is expressions, lambdas, calls and types.
 - Proportional text and delimiters that span their block.
 - New and Open; a mark that the document has unsaved changes.
 - CAM, Fidget, the web and macOS targets.
-- Derivatives of the projection: every event recomputes it. Measured by
-  `progred_measure`, laying out and making the rows takes about 17 ms for
-  `toolpaths.gid` (some 1,250 lines) and 7 ms for `iop-tree.gid` (some 700),
-  and an event does it two or three times, since moving the selection lays
-  the document out to find what's drawn. A notebook of a screen or two is
-  well under a millisecond; a large one is where the derivative, or first
-  laying out once per event, would pay.
-- Laws about Progred itself: only deui's are proved (the redraw view is
-  correct, and the screen's copy of the scene stays the scene).
+- What the view still does in proportion to the document. An event that
+  changes the selection or the document works out every part's input again
+  and compares it, about a microsecond a part; the scrolled list counts the
+  rows above the window for an edit among them; and a root that isn't a
+  notebook is one part, laid out whole (the Rust version's own example files,
+  whose roots are its panes, are like that here). An edit to a definition
+  works out again what every entry reaches. A function projection's results
+  go to every part that has such a kind, so they're all laid out again when
+  one record's changes.
+- Laws about Progred beyond its view: `view_ok` says the scene on screen is
+  the view of the model, and nothing says the editing is right. What runs
+  outside the pure update (Lean, the files, the clipboard) isn't in any law,
+  and Lean's results are remembered there by the code they came from.

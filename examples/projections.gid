@@ -1,0 +1,40 @@
+{
+  "binders": {
+    "isa": dbd7e1a38e30425fb1b408b2e446bb1b, "name": 02e562654d6d0828d3a7559e6f75fffe,
+    "def": a9a53af4187f4715f1eebdf58e0c65c0, "fields": 003bb68cfb673326a483cd31b03ba27f,
+    "projection": 873503e2e37a1722a0dd21399be9ee7f,
+    "notebook": 9111dde9a00f4106a817720187b45645, "entries": 26b6e7f1fc0d482da89e2a4835d2f789,
+    "call": 8dd318828a4c42cf9f2d5d1ba9b068fe, "function": 751fca4373debdd0b7e6eb73e08d684b,
+    "lambda": e4a0653134ca48379cab2e008bed03e7, "params": 195b378d0d31d90ab0d7366c15346b70, "body": 986143866eda2e2fbf9ab8484357a0c9,
+    "u64": fc77282178c2fa31b80aed2b8b6f7888, "bytes": fe06bf0459d2598aa29b30302e3b29b8,
+    "row": 87d4e055430f84ab00140f2934f1d77f, "row_children": d23374931e8a0492a265f0a872b515a8,
+    "column": 2e90a071a682ebdd84ed6593b81538a8, "column_children": d887d8d49571e6040a69e35e0e27fd0d,
+    "words": fa6f68b37b42c5e9ed2fd9a7dbb91bc3, "words_content": a8c7d9ed588d9a78dc2293c3d0e57052,
+    "faint": 709f8d0e2fbed1e7c95b11adcbebbae3, "faint_content": c5888843bed3e0f22edda8c069dee4e5,
+    "part": 649d359c0bed68672c1f858fcbead6e6, "part_field": 3fc73f4c701f738a54d287f7c68c5c76,
+    "field": bb9223322426dfef9326bdb5338de48f, "field_of": 9881f391f8fa5680968816745943b9b1, "field_label": 36fb69343d13af3580e93157be400755,
+    "count": a8e0ae90f569e8485cf51e759233a475, "count_of": 51c60f7e8df75bfb1cd1b7c8a8011323,
+    "repeat": 162cdf43aabfe4ec36ec8925f59067a2, "repeat_text": 44e5289c4c5811d5642389a427b22afe, "repeat_count": c126ee6e7b3a61db2f83596c8cf17ecc,
+  },
+  "cells": {
+    over: {name: "over"}, under: {name: "under"}, amount: {name: "amount"}, value: {name: "value"},
+    fraction: {isa: def, name: "fraction", fields: [over, under],
+      projection: {isa: call, function: column, column_children: [
+        {isa: call, function: part, part_field: over},
+        {isa: call, function: faint, faint_content: "────"},
+        {isa: call, function: part, part_field: under}]}},
+    bar: {isa: def, name: "bar", fields: [amount],
+      projection: {isa: lambda, params: [value], body:
+        {isa: call, function: row, row_children: [
+          {isa: call, function: part, part_field: amount},
+          {isa: call, function: faint, faint_content: " "},
+          {isa: call, function: words, words_content:
+            {isa: call, function: repeat, repeat_text: "█", repeat_count:
+              {isa: call, function: count, count_of: {isa: call, function: field, field_of: value, field_label: amount}}}}]}}},
+  },
+  "root": { isa: notebook, entries: [
+    {isa: fraction, over: {isa: u64, bytes: 0x0100000000000000}, under: {isa: u64, bytes: 0x0200000000000000}},
+    {isa: bar, amount: {isa: u64, bytes: 0x0700000000000000}},
+    {isa: fraction, over: {isa: u64, bytes: 0x0300000000000000}},
+  ] },
+}

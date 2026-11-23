@@ -76,6 +76,47 @@ structure Shown where
   folds : List (Path × Bool) := []
   /-- Evaluations' outcomes, by expression. -/
   results : List (Value × Outcome) := []
+  /-- What projections that are functions gave: the function, the record,
+  and its layout. -/
+  layouts : List (Value × Value × Value) := []
+
+/-- A layout: what a projection draws a record with. It's read from a
+value, a call of a layout function, whether a document holds it or a
+function gave it. -/
+inductive Node where
+  | row (children : List Node)
+  | column (children : List Node)
+  | indent (child : Node)
+  /-- The first of its children that fits. -/
+  | either (children : List Node)
+  | words (content : String)
+  | faint (content : String)
+  /-- The record's part at a field, drawn in place, where it's edited. -/
+  | part (field : CellId)
+  deriving Inhabited
+
+/-- A layout, read from a value; none if the value isn't one all through. -/
+partial def Node.read (v : Value) : Option Node := do
+  guard (v.kind? == some Kinds.call)
+  let function ← match v.field? Kinds.function with
+    | some (.cell c) => some c
+    | _ => none
+  let children (label : CellId) : Option (List Node) :=
+    match v.field? label with
+    | some (.list items) => items.mapM fun (_, w) => Node.read w
+    | _ => none
+  let text (label : CellId) : Option String := (v.field? label).bind Value.text?
+  if function == Builtin.Layout.row then .row <$> children Builtin.Layout.rowChildren
+  else if function == Builtin.Layout.column then .column <$> children Builtin.Layout.columnChildren
+  else if function == Builtin.Layout.either then .either <$> children Builtin.Layout.eitherChildren
+  else if function == Builtin.Layout.indent then .indent <$> ((v.field? Builtin.Layout.indentChild).bind Node.read)
+  else if function == Builtin.Layout.words then .words <$> text Builtin.Layout.wordsContent
+  else if function == Builtin.Layout.faint then .faint <$> text Builtin.Layout.faintContent
+  else if function == Builtin.Layout.part then
+    match v.field? Builtin.Layout.partField with
+    | some (.cell c) => some (.part c)
+    | _ => none
+  else none
 
 namespace Display
 
@@ -125,6 +166,22 @@ def hole (path : Path) : M Doc :=
     match editingAt s path .edge with
     | some e => occ path .hole (.row [typing e .ink])
     | none => occ path .hole (dim "_")
+
+/-- The layout a kind's records are drawn with, for a record: its def's
+projection, if that's a layout, or a function that has given this record
+one. -/
+def projection (k : CellId) (v : Value) : Option Node :=
+  match s.doc.lookup? s.library k with
+  | some d =>
+    if d.kind? != some Kinds.def_ then none
+    else
+      (d.field? Kinds.projection).bind fun p =>
+        let source := match p with
+          | .cell c => (s.doc.lookup? s.library c).getD p
+          | _ => p
+        (Node.read source).orElse fun _ =>
+          (s.layouts.find? fun l => l.1 == source && l.2.1 == v).bind fun l => Node.read l.2.2
+  | none => none
 
 /-- Whether a cell is drawn open at a path: as the user set it, else open
 when it has a definition of the document's that's more than a name, isn't
@@ -234,8 +291,26 @@ partial def drawn (path : Path) (v : Value) (plain : Bool) : M Doc := do
         else if k == Kinds.call then call path v
         else if k == Kinds.valueWrapper then
           return .row [← nameOf path v "name", t " = ", ← value (path ++ [.key Kinds.value]) (v.field? Kinds.value)]
-        else kinded path k fields
+        else
+          match projection s k v with
+          | some node => layout path v node
+          | none => kinded path k fields
       | none => record path fields
+
+/-- A record, drawn by a layout: its parts are the record's own, at their
+fields, so they're edited where they're drawn. -/
+partial def layout (path : Path) (v : Value) : Node → M Doc
+  | .row children => return .row (← children.mapM (layout path v))
+  | .column children => return .col (← children.mapM (layout path v))
+  | .indent child => return .indent 2 (← layout path v child)
+  | .either children => do
+    let drawn ← children.mapM (layout path v)
+    return match drawn.reverse with
+      | [] => .row []
+      | last :: before => before.foldl (fun rest d => .alt d rest) last
+  | .words content => return t content
+  | .faint content => return dim content
+  | .part field => value (path ++ [.key field]) (v.field? field)
 
 /-- A cell: open, its definition in parentheses; closed, its name, or its
 kind and short id. -/
@@ -577,6 +652,7 @@ structure Input where
   selection : Option Selection
   folds : List (Path × Bool)
   results : List (Value × Outcome)
+  layouts : Shared (List (Value × Value × Value))
   /-- The selected cell, if this part may show it elsewhere. -/
   marked : Option CellId
   ribbon : Nat
@@ -602,7 +678,7 @@ open Display in
 def Display.part (i : Input) : Block :=
   let s : Shown :=
     { doc := { root := none, cells := Std.TreeMap.ofList i.cells.val }, library := Builtin.library,
-      selection := i.selection, folds := i.folds, results := i.results }
+      selection := i.selection, folds := i.folds, results := i.results, layouts := i.layouts.val }
   let (doc, drawn) := (partDoc s i.shape).run {}
   let lines := Doc.lines i.ribbon 0 0 0 doc
   let occs := drawn.occs
@@ -687,23 +763,38 @@ def itemKeys (root : Option Value) (cells : Cells) : List ItemKey :=
 evaluations' expressions in it. -/
 inductive Item where
   | entry (position : Position) (value : Value) (reached : Shared (List (CellId × Value)))
-      (expressions : List Value)
+      (expressions : List Value) (functions : Bool)
   | whole (root : Option Value) (reached : Shared (List (CellId × Value))) (expressions : List Value)
+      (functions : Bool)
   deriving DecidableEq, Inhabited
+
+/-- Whether any of the definitions is a def whose projection is a function:
+what's drawn then depends on what the functions gave. -/
+def anyFunctions (reached : List (CellId × Value)) : Bool :=
+  reached.any fun (_, d) =>
+    d.kind? == some Kinds.def_ &&
+      match d.field? Kinds.projection with
+      | some (.cell c) => ((reached.find? (·.1 == c)).map fun (_, p) => (Node.read p).isNone).getD false
+      | some p => (Node.read p).isNone
+      | none => false
 
 def item : ItemKey → Item
   | .entry position value cells =>
-    .entry position value ⟨reachIn cells.val (mentionsInto #[] value).toList⟩ (expressionsIn value)
+    let reached := reachIn cells.val (mentionsInto #[] value).toList
+    .entry position value ⟨reached⟩ (expressionsIn value) (anyFunctions reached)
   | .whole root cells =>
     match root with
-    | some v => .whole root ⟨reachIn cells.val (mentionsInto #[] v).toList⟩ (expressionsIn v)
-    | none => .whole root ⟨[]⟩ []
+    | some v =>
+      let reached := reachIn cells.val (mentionsInto #[] v).toList
+      .whole root ⟨reached⟩ (expressionsIn v) (anyFunctions reached)
+    | none => .whole root ⟨[]⟩ [] false
 
 /-- What of the editor's state the parts are drawn with. -/
 structure Seen where
   selection : Option Selection := none
   folds : List (Path × Bool) := []
   results : List (Value × Outcome) := []
+  layouts : Shared (List (Value × Value × Value)) := ⟨[]⟩
   /-- The cell the selection is on, and whether the document defines it. -/
   marked : Option CellId := none
   markedDefined : Bool := false
@@ -718,14 +809,16 @@ entry being added among them, and no place to add an entry beside the hole;
 or one for the whole root. -/
 def assemble (items : List Item) (c : Seen) : List Input :=
   match items with
-  | [.whole root cells expressions] =>
+  | [.whole root cells expressions functions] =>
     [{ shape := .whole root, cells, selection := c.selection, folds := c.folds,
-       results := c.results.filter fun r => expressions.contains r.1, marked := c.marked, ribbon := c.ribbon }]
+       results := c.results.filter fun r => expressions.contains r.1,
+       layouts := if functions then c.layouts else ⟨[]⟩,
+       marked := c.marked, ribbon := c.ribbon }]
   | _ =>
     -- The root notebook's entries: an item that isn't one is no entry.
-    let items : List (Position × Value × Shared (List (CellId × Value)) × List Value) :=
+    let items : List (Position × Value × Shared (List (CellId × Value)) × List Value × Bool) :=
       items.filterMap fun
-        | .entry p v reached expressions => some (p, v, reached, expressions)
+        | .entry p v reached expressions functions => some (p, v, reached, expressions, functions)
         | .whole .. => none
     -- The entry being added, if the selection is pending among the entries.
     let pending : Option Position :=
@@ -737,7 +830,7 @@ def assemble (items : List Item) (c : Seen) : List Input :=
           | _ => none
         else none
       | none => none
-    let all : List (Position × Option (Value × Shared (List (CellId × Value)) × List Value)) :=
+    let all : List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) :=
       match pending with
       | some p =>
         (items.filter fun i => Position.lt i.1 p).map (fun i => (i.1, some i.2)) ++ [(p, none)] ++
@@ -745,7 +838,7 @@ def assemble (items : List Item) (c : Seen) : List Input :=
       | none => items.map fun i => (i.1, some i.2)
     let at_ (p : Position) : Path := entriesPath ++ [.element p]
     let rec go (number : Nat) (prev : Option (Position × Bool)) :
-        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value)) → List Input
+        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) → List Input
       | [] => []
       | (p, item) :: rest =>
         let beside := item.isNone || (prev.map (·.2)).getD false
@@ -754,16 +847,18 @@ def assemble (items : List Item) (c : Seen) : List Input :=
         let path := at_ p
         let touches (q : Path) : Bool := path.isPrefixOf q || q.isPrefixOf path
         let cells : Shared (List (CellId × Value)) := (item.map (·.2.1)).getD ⟨[]⟩
-        let expressions := (item.map (·.2.2)).getD []
+        let expressions := (item.map (·.2.2.1)).getD []
+        let functions := (item.map (·.2.2.2)).getD false
         { shape := .entry number path (item.map (·.1)) before after, cells,
           selection := c.selection.filter fun sel => touches sel.path,
           folds := c.folds.filter fun f => path.isPrefixOf f.1,
           results := c.results.filter fun r => expressions.contains r.1,
+          layouts := if functions then c.layouts else ⟨[]⟩,
           marked := c.marked.filter fun cell => !c.markedDefined || cells.val.any (·.1 == cell),
           ribbon := c.ribbon } :: go (number + 1) (some (p, item.isNone)) rest
     if all.isEmpty then
       [{ shape := .empty (at_ (Position.between none none)), cells := ⟨[]⟩, selection := none, folds := [],
-         results := [], marked := none, ribbon := c.ribbon }]
+         results := [], layouts := ⟨[]⟩, marked := none, ribbon := c.ribbon }]
     else go 1 none all
 
 /-- A document's parts, laid out: all of it, worked out from nothing. -/

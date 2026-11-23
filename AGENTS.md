@@ -44,8 +44,21 @@ Read `README.md` first for what the repository is.
   time with `CellId.new`. Never make one up or derive one from a name.
 - `progred_play` plays keys through the editor with no window and prints
   what it would show; try an editing change there first. With arguments it
-  plays them as keys (`'<tab> note <enter>'`); with none, its own walk,
-  whose output is what to compare before and after a change.
+  plays them as keys (`'<tab> note <enter>'`), from the `.gid` file that's
+  the first if there is one; with none, its own walk, whose output is what
+  to compare before and after a change. It says so if the layout or the
+  scene the view keeps isn't what working it out again gives.
+- The view is incremental steps composed (`Progred/Editor.lean`), and
+  `view_ok` is their laws composed. What a part's layout reads has to be
+  in its `Input` (`Progred/Display.lean`): a layout that read anything
+  else would be kept when it shouldn't be. Something new the drawing
+  depends on goes into `Seen` and `Input`.
+- `progred_measure` says what events cost; run it before and after a
+  change to the view, on a notebook (`progred_measure 300`).
+- Skinny is the language: the subset of Lean that `Progred/Skinny.lean`
+  makes from a document. A function Lean supplies is a cell in
+  `Progred/Builtin.lean` and a case in `Skinny.supplied`; what code is run
+  against, besides Lean's library, is `Progred/Prelude.lean`.
 - Model what you mean: when something new needs saying, give it its own
   name, step or type, rather than encoding it in a mechanism that means
   something else.

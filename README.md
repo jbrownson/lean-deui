@@ -49,9 +49,22 @@ module does.
 - `Drawn.lean`: a drawing on the screen, as a column's children. Its
   derivative turns each drawing edit into scene edits, without needing the
   drawing (`inc_ok`).
+- `Diff.lean`, `Combine.lean`, `Flatten.lean`, `Anchored.lean`: what a
+  view is put together from, each correct if its parts are. `change` gives
+  the edits between two lists, leaving what they start and end with in
+  common; `tracked` is a list that's a function of a value, as edits from
+  what it was, and `memo` a function kept while its input is the same, so
+  a state replaced whole still reaches the screen as the edits that
+  matter. `flatChange` joins lists of rows, comparing only where a list
+  changed; `anchored` puts rows at an offset into the scrolled list;
+  `layers` and `keyed` put scenes one over another, and rebuild one when
+  its key changes. What's called the same has to be equal (that's proved),
+  and is found at once for a value that's one object in both.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
-  a key, text typed or the wheel, to edits. An event's edits go to the state, and
+  a key, text typed or the wheel, to edits; a handler also reads what the
+  view keeps, and `settle` adds the edits that depend on the view of the
+  new state. An event's edits go to the state, and
   through the view's derivative to the scene on screen. `play_shows` says
   that if the derivative is correct, the scene on screen is always the view
   of the state, as if it had run again. `turns` gives the scene edits a
@@ -85,8 +98,8 @@ module does.
 ## Progred
 
 `Progred/` is a projectional editor on deui: the core of
-[Progred](https://github.com/jbrownson/progred), in Lean, with a subset of
-Lean as its language in place of Grap. It's a separate library that depends
+[Progred](https://github.com/jbrownson/progred), in Lean, with Skinny, a
+subset of Lean, as its language in place of Grap. It's a separate library that depends
 on `Deui`, never the reverse. `docs/progred-port.md` says what the Rust
 version does, what this one decides, and what isn't here yet.
 
@@ -102,15 +115,36 @@ version does, what this one decides, and what isn't here yet.
   out in characters, on one line where it fits a ribbon, else stacked.
   Every drawn thing is an occurrence, so selections, keys and clicks find
   their place.
+  The document is drawn in parts, an entry of the root notebook each, and
+  a part is laid out from an input that holds all it depends on.
 - `Model.lean`, `Editing.lean`: the editor: selection, navigation by what's
   drawn, holes answered by offers as you type, lines typed in place, undo.
-- `Lean.lean`, `Run.lean`: the language. An expression becomes Lean
-  `Syntax`, built with quotations, never text, and is elaborated and run
-  by Lean at run time, in an environment loaded once. Errors come back at
-  the node they're about, which is drawn on red.
+- `Skinny.lean`, `Prelude.lean`, `Run.lean`: the language, Skinny. An
+  expression becomes Lean `Syntax`, built with quotations, never text, and
+  is elaborated and run by Lean at run time, in an environment loaded
+  once, with the prelude, so a document's code gives this program's own
+  values. A parameter can have a type and a lambda what it returns; a
+  lambda that calls itself needs both. Errors come back at the node
+  they're about, which is drawn on red.
 - `Editor.lean`, `Outside.lean`, `Main.lean`: the editor as a deui app; what
-  reaches it from outside (fresh ids, evaluations' results, the clipboard,
-  saving); and the program.
+  reaches it from outside (fresh ids, evaluations' results, what
+  projections that are functions give, the clipboard, saving); and the
+  program. The view is deui's pieces composed, and `view_ok` follows from
+  theirs: the scene on screen is the view of the model, though an edit
+  lays out only the entries it touches and changes only the rows that
+  differ.
+
+A kind's records are drawn by its def's `projection`, written in the
+document: a layout (`row`, `column`, `indent`, `either`, `words`, `faint`,
+and `part`, which draws the record's own value at a field, where it's
+edited), or a function of the record that gives one. A layout as it stands
+is read with no code run; a function is run by Lean on each record of the
+kind. `examples/projections.gid` has one of each: a fraction, and a bar as
+long as its amount.
+
+On a notebook of 3,000 lines in 300 entries (`progred_measure 300`): the
+wheel takes about 15 µs, an arrow key 0.4 ms, a keystroke of typing 0.3 ms,
+against 15 ms to lay the document out from nothing.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).
@@ -120,7 +154,8 @@ a number or a name edits it in place. Return on a value adds a peer after
 it (Shift: before), Ctrl+Return adds within it. Backspace deletes a value,
 leaving a hole, and again removes the hole. Space folds or opens a cell.
 Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste a value, as GID text on the
-system clipboard. Ctrl+Z undoes, Ctrl+Shift+Z redoes, Ctrl+S saves.
+system clipboard. Ctrl+Z undoes, Ctrl+Shift+Z redoes, Ctrl+S saves. A
+colon on a parameter gives it a type, and on a lambda what it returns.
 
 ## Building
 
@@ -132,12 +167,17 @@ lake build todo_long && .lake/build/bin/todo_long       # with 10,000 items
 lake build progred && .lake/build/bin/progred notes.gid # Progred, on a file it makes or opens
 lake build progred_play && .lake/build/bin/progred_play # plays keys through Progred, with no window
 .lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
+.lake/build/bin/progred examples/projections.gid        # kinds drawn by projections in the document
+lake build progred_measure && .lake/build/bin/progred_measure 300  # what events cost, on a notebook of 300 entries
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version
 in `lean-toolchain`. Progred runs Lean at run time, so `lean` has to be on
 the `PATH` when it starts: it loads the toolchain's own library from there.
-Its binary is large (about 235 MB), since Lean itself is linked in.
+Its binary is large (about 235 MB), since Lean itself is linked in. Skinny's
+prelude is loaded from the build's library, beside the program
+(`.lake/build/lib/lean`); moved away from it, the program runs, without
+the projections that are functions.
 `gid_show` prints files as Progred shows them, and `gid_round_trip` checks
 that files read and write back the same.
 

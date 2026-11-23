@@ -2,6 +2,7 @@ import Lean
 import Progred.Builtin
 import Progred.Display
 import Progred.Run
+import Progred.Prelude
 
 /-!
 Skinny: the subset of Lean a document is written in. A value becomes Lean
@@ -79,6 +80,18 @@ def supplied (name : String) (args : Array Term) : M Term := do
   | "Bool", #[] => `(Bool)
   | "List", #[a] => `((List $a))
   | "Function", #[a, b] => `(($a → $b))
+  | "row", #[c] => `((Progred.Prelude.row $c))
+  | "column", #[c] => `((Progred.Prelude.column $c))
+  | "indent", #[c] => `((Progred.Prelude.indent $c))
+  | "either", #[c] => `((Progred.Prelude.either $c))
+  | "words", #[t] => `((Progred.Prelude.words $t))
+  | "faint", #[t] => `((Progred.Prelude.faint $t))
+  | "part", #[l] => `((Progred.Prelude.part $l))
+  | "field", #[v, l] => `((Progred.Prelude.field $v $l))
+  | "number", #[v] => `((Progred.Prelude.number $v))
+  | "count", #[v] => `((Progred.Prelude.count $v))
+  | "content", #[v] => `((Progred.Prelude.content $v))
+  | "repeat", #[t, n] => `((String.join (List.replicate $n $t)))
   | _, _ => fail 0 s!"Lean has no function {name} of {args.size} arguments"
 
 variable (doc : Document) (lib : Library)
@@ -180,7 +193,13 @@ partial def call (bound : List CellId) (at_ : Where) (n : Nat) (v : Value) : M T
       | none => []
     let args ← params.mapM fun p =>
       match v.field? p with
-      | some a => term bound (into at_ [.key p]) a
+      | some a =>
+        if Builtin.labelParams.contains p then
+          -- A field's label is the cell itself: its id goes across.
+          match a with
+          | .cell c => pure (⟨Syntax.mkStrLit c.hex⟩ : Term)
+          | _ => fail n s!"{doc.shown lib p} takes a field's label"
+        else term bound (into at_ [.key p]) a
       | none => fail n s!"no {doc.shown lib p} given"
     match target with
     | some (c, d) =>
@@ -234,6 +253,16 @@ and where each numbered node's value is; or what's wrong with it. -/
 def convert (expression : Value) : Except Failure (Array Syntax × Syntax × Array Where) :=
   match Unhygienic.run ((term doc lib [] (some []) expression).run {}).run with
   | .ok (t, s) => .ok (s.commands, t.raw, s.nodes)
+  | .error f => .error f
+
+/-- A projection that's a function, as Lean: the definitions it needs, and
+its term, a function from a record to its layout. -/
+def function (projection : Value) : Except Failure (Array Syntax × Syntax) :=
+  let made : M Term := do
+    let f ← term doc lib [] none projection
+    `(($f : Progred.Value → Progred.Value))
+  match Unhygienic.run (made.run {}).run with
+  | .ok (t, s) => .ok (s.commands, t.raw)
   | .error f => .error f
 
 /-- Every evaluation's expression in a document. -/

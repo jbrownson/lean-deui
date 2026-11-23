@@ -20,6 +20,32 @@ structure Function where
   params : List (CellId × String)
   symbol : Option String := none
 
+/-! The layout functions' cells: a projection is written with them, and a
+layout is read by them. -/
+namespace Layout
+def row := cell! "87d4e055430f84ab00140f2934f1d77f"
+def rowChildren := cell! "d23374931e8a0492a265f0a872b515a8"
+def column := cell! "2e90a071a682ebdd84ed6593b81538a8"
+def columnChildren := cell! "d887d8d49571e6040a69e35e0e27fd0d"
+def indent := cell! "c0e58ffb89f6e2713e40bff7475e8b73"
+def indentChild := cell! "402c8c7f1c0d1e103ab3044a7ae93729"
+def either := cell! "e24ae9b61d89db4f2b470dfcf317ffd2"
+def eitherChildren := cell! "c070b8abdd234f8729e424cd01030ef0"
+def words := cell! "fa6f68b37b42c5e9ed2fd9a7dbb91bc3"
+def wordsContent := cell! "a8c7d9ed588d9a78dc2293c3d0e57052"
+def faint := cell! "709f8d0e2fbed1e7c95b11adcbebbae3"
+def faintContent := cell! "c5888843bed3e0f22edda8c069dee4e5"
+def part := cell! "649d359c0bed68672c1f858fcbead6e6"
+def partField := cell! "3fc73f4c701f738a54d287f7c68c5c76"
+def field := cell! "bb9223322426dfef9326bdb5338de48f"
+def fieldOf := cell! "9881f391f8fa5680968816745943b9b1"
+def fieldLabel := cell! "36fb69343d13af3580e93157be400755"
+end Layout
+
+/-- The parameters that take a field's label, the cell itself, and not a
+value. -/
+def labelParams : List CellId := [Layout.partField, Layout.fieldLabel]
+
 def functions : List Function := [
   ⟨cell! "6f49af7620696d771b7a9d00550795aa", "add",
     [(cell! "558b23a7bb86b251e9510f6da7aab770", "a"), (cell! "42cec7db784ab28ee617b5479bc46b7f", "b")], some "+"⟩,
@@ -66,7 +92,20 @@ def functions : List Function := [
   ⟨cell! "7ee4139cae4cf234fba954832c22a407", "Bool", [], none⟩,
   ⟨cell! "c49f205d823111a4b541e0f0063b64d6", "List", [(cell! "59295ade0021750cc016eadbaec6ea5b", "of")], none⟩,
   ⟨cell! "81b580321520669dd1221762362c250e", "Function",
-    [(cell! "1d7791fc69fd20edc9d50a4e4b447125", "from"), (cell! "50d7adfc82af458f8422c320398b9781", "to")], some "→"⟩]
+    [(cell! "1d7791fc69fd20edc9d50a4e4b447125", "from"), (cell! "50d7adfc82af458f8422c320398b9781", "to")], some "→"⟩,
+  ⟨Layout.row, "row", [(Layout.rowChildren, "children")], none⟩,
+  ⟨Layout.column, "column", [(Layout.columnChildren, "children")], none⟩,
+  ⟨Layout.indent, "indent", [(Layout.indentChild, "child")], none⟩,
+  ⟨Layout.either, "either", [(Layout.eitherChildren, "children")], none⟩,
+  ⟨Layout.words, "words", [(Layout.wordsContent, "content")], none⟩,
+  ⟨Layout.faint, "faint", [(Layout.faintContent, "content")], none⟩,
+  ⟨Layout.part, "part", [(Layout.partField, "field")], none⟩,
+  ⟨Layout.field, "field", [(Layout.fieldOf, "of"), (Layout.fieldLabel, "field")], none⟩,
+  ⟨cell! "317149e7a11a128fcf663593380515ed", "number", [(cell! "c356e0d7e31a4859fa5b10c9b2cc2675", "of")], none⟩,
+  ⟨cell! "a8e0ae90f569e8485cf51e759233a475", "count", [(cell! "51c60f7e8df75bfb1cd1b7c8a8011323", "of")], none⟩,
+  ⟨cell! "1f69ef36f064749137baf0e16c170696", "content", [(cell! "afc20324d18afae369e9409eba08b433", "of")], none⟩,
+  ⟨cell! "162cdf43aabfe4ec36ec8925f59067a2", "repeat",
+    [(cell! "44e5289c4c5811d5642389a427b22afe", "text"), (cell! "c126ee6e7b3a61db2f83596c8cf17ecc", "count")], none⟩]
 
 /-- Whether a function is a type, or makes one. -/
 def Function.isType (f : Function) : Bool :=
@@ -90,7 +129,7 @@ def kinds : List (CellId × Value) := [
   (Kinds.call, kind "call" [Kinds.function]),
   (Kinds.section_, kind "section" [Kinds.name, Kinds.sectionBody]),
   (Kinds.notebook, kind "notebook" [Kinds.entries]),
-  (Kinds.def_, kind "def" [Kinds.name, Kinds.fields]),
+  (Kinds.def_, kind "def" [Kinds.name, Kinds.fields, Kinds.projection]),
   (Kinds.library, kind "library" [Kinds.name, Kinds.defs, Kinds.functions])]
 
 def library : Library :=
@@ -102,6 +141,7 @@ def library : Library :=
     (Kinds.params, named "params"), (Kinds.body, named "body"), (Kinds.function, named "function"),
     (Kinds.value, named "value"), (Kinds.expression, named "expression"),
     (Kinds.leanFunction, named "lean function"), (Kinds.type_, named "type"), (Kinds.returns, named "returns"),
+    (Kinds.projection, named "projection"),
     (Kinds.true_, Value.ofKind Kinds.valueWrapper
       [(Kinds.name, Value.text "true"), (Kinds.value, Value.literal Kinds.bool [1])]),
     (Kinds.false_, Value.ofKind Kinds.valueWrapper

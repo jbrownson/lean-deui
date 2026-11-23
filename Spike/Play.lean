@@ -65,18 +65,28 @@ def script (s : String) : List App.Event :=
         | _ => []
     else type word
 
-/-- With arguments, plays each as a step, from an empty document; with
-none, plays the walk below. -/
+/-- With arguments, plays each as a step, from an empty document, or from
+the file that's the first argument; with none, plays the walk below. -/
 unsafe def main (args : List String) : IO Unit := do
   let rt ← Run.Runtime.load
   let memo ← IO.mkRef []
+  let functions ← IO.mkRef []
   let clipboard ← Outside.Clipboard.inMemory
-  let mut m : M := App.start Editor.app {}
+  -- A first argument that's a file is the document to start from.
+  let (doc, args) ← match args with
+    | path :: rest =>
+      if path.endsWith ".gid" then
+        match ← GidText.parse (← IO.FS.readFile path) with
+        | .ok d => pure (d, "" :: rest)
+        | .error e => throw (IO.userError s!"{path}: {e}")
+      else pure (({} : Document), args)
+    | [] => pure (({} : Document), args)
+  let mut m : M := App.start Editor.app { doc }
   if !args.isEmpty then
     for step in args do
       for e in script step do
         m := App.step Editor.app m e
-        m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+        m := (App.applied Editor.app m (← Outside.edits rt memo functions none clipboard m.state)).1
       IO.println s!"-- {step}"
       show_ m
     return
@@ -107,13 +117,13 @@ unsafe def main (args : List String) : IO Unit := do
   for (name, es) in steps do
     for e in es do
       m := App.step Editor.app m e
-      m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+      m := (App.applied Editor.app m (← Outside.edits rt memo functions none clipboard m.state)).1
     IO.println s!"-- {name}"
     show_ m
   clipboard.set "from elsewhere"
   for e in enter ++ key 'v'.toNat.toUInt32 2 do
     m := App.step Editor.app m e
-    m := (App.applied Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+    m := (App.applied Editor.app m (← Outside.edits rt memo functions none clipboard m.state)).1
   IO.println "-- text from elsewhere pasted as a new entry"
   show_ m
   IO.println "-- as a file"

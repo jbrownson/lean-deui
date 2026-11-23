@@ -1,4 +1,5 @@
 import Lean
+import Progred.Prelude
 
 /-!
 Running Lean at run time, from syntax built as data: no text is parsed.
@@ -40,16 +41,25 @@ partial def tagOuter (id : Nat) (stx : Syntax) : Syntax :=
   | .ident i r v p => .ident (fresh i) r v p
   | .missing => .missing
 
-/-- Lean's core library, loaded. -/
+/-- Lean's core library, loaded, and Skinny's prelude if it was found. -/
 structure Runtime where
   env : Environment
+  prelude : Bool
 
 /-- Loads Lean's core library, from the toolchain this program was built
-with. Takes a few hundred milliseconds. -/
+with, and Skinny's prelude, from beside this program: the library its
+build made (`.lake/build/lib/lean`, with the program in `.lake/build/bin`).
+Without the prelude, code runs that doesn't use it. Takes a few hundred
+milliseconds. -/
 unsafe def Runtime.load : IO Runtime := do
   enableInitializersExecution
-  initSearchPath (← findSysroot)
-  return ⟨← importModules #[{ module := `Init }] {} (loadExts := true)⟩
+  let beside := (← IO.appPath).parent.bind (·.parent) |>.map (· / "lib" / "lean")
+  let found ← match beside with
+    | some dir => (dir / "Progred" / "Prelude.olean").pathExists
+    | none => pure false
+  initSearchPath (← findSysroot) (if found then beside.toList else [])
+  let modules : Array Import := #[{ module := `Init }] ++ (if found then #[{ module := `Progred.Prelude }] else #[])
+  return ⟨← importModules modules {} (loadExts := true), found⟩
 
 /-- One long line stands in for a source file, so a position's column is the
 node id it was tagged with. -/
@@ -115,6 +125,30 @@ unsafe def Runtime.eval (rt : Runtime) (commands : Array Syntax) (term : Syntax)
         synthesizeSyntheticMVarsNoPostponing
         instantiateMVars s
     return ⟨← evalExpr String (mkConst ``String) shown, typeText⟩
+  return r
+
+/-- Elaborates the commands in order, then the term, a function from a
+value to a value, and gives it as one of this program's functions. -/
+unsafe def Runtime.function (rt : Runtime) (commands : Array Syntax) (term : Syntax) :
+    IO (Except (List Problem) (Value → Value)) := do
+  if !rt.prelude then
+    return .error [⟨0, "Skinny's prelude wasn't found beside the program, so projections that are functions can't run"⟩]
+  let mut env := rt.env
+  for c in commands do
+    let (r, env') ← run env (elabCommand c)
+    match r with
+    | .ok () => env := env'
+    | .error ps => return .error ps
+  let (r, _) ← run env <| liftTermElabM <| withoutErrToSorry do
+    let value := Lean.mkConst ``Progred.Value
+    let type ← mkArrow value value
+    let t : TSyntax `term := ⟨term⟩
+    let e ← elabTerm t (some type)
+    synthesizeSyntheticMVarsNoPostponing
+    let e ← instantiateMVars e
+    if (← MonadLog.hasErrors) then return (fun v => v : Value → Value)
+    if e.hasExprMVar then throwErrorAt term "this isn't a definite function from a value to a layout"
+    evalExpr (Value → Value) type e
   return r
 
 end Progred.Run

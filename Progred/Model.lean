@@ -23,6 +23,9 @@ structure Model where
   /-- What evaluations gave, by expression; `stale` when the document has
   changed since they ran. -/
   results : List (Value × Outcome) := []
+  /-- What projections that are functions gave, held as one object so
+  parts compare it at once. -/
+  layouts : Shared (List (Value × Value × Value)) := ⟨[]⟩
   stale : Bool := true
   undo : List Snapshot := []
   redo : List Snapshot := []
@@ -53,7 +56,8 @@ def lineHeight : Nat := 22
 def margin : Nat := 16
 
 def shown (m : Model) : Shown :=
-  { doc := m.doc, library := m.library, selection := m.selection, folds := m.folds, results := m.results }
+  { doc := m.doc, library := m.library, selection := m.selection, folds := m.folds, results := m.results,
+    layouts := m.layouts.val }
 
 def ribbon (m : Model) : Nat := max 30 ((m.width - 2 * margin) / charWidth)
 
@@ -78,7 +82,7 @@ def selectedCell (m : Model) : Option CellId :=
 /-- What of the state the parts are drawn with. -/
 def seen (m : Model) : Display.Seen :=
   let marked := m.selectedCell
-  { selection := m.selection, folds := m.folds, results := m.results, marked,
+  { selection := m.selection, folds := m.folds, results := m.results, layouts := m.layouts, marked,
     markedDefined := (marked.bind m.doc.definition?).isSome, ribbon := m.ribbon }
 
 def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩

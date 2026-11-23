@@ -25,10 +25,11 @@ unsafe def main (args : List String) : IO Unit := do
     | none => pure {}
   let rt ← Run.Runtime.load
   let memo ← IO.mkRef []
+  let functions ← IO.mkRef []
   let found ← fonts.filterM fun f => (System.FilePath.mk f).pathExists
   let font := found.headD (fonts.headD "")
   let title := match file with
     | some path => s!"Progred: {path}"
     | none => "Progred"
   Deui.Screen.run Editor.app title font 1000 720 Editor.paper { doc, width := 1000, height := 720 }
-    (outside := some (Outside.edits rt memo file ⟨Deui.Screen.clipboardSet, Deui.Screen.clipboardGet⟩))
+    (outside := some (Outside.edits rt memo functions file ⟨Deui.Screen.clipboardSet, Deui.Screen.clipboardGet⟩))

@@ -59,6 +59,54 @@ unsafe def evaluate (rt : Run.Runtime) (memo : Memo) (m : Model) : IO (List (Val
   memo.set kept
   return results
 
+/-- Projections that are functions, by the Lean they became, so one is
+elaborated once. -/
+abbrev Functions := IO.Ref (List (String × (Value → Value)))
+
+/-- Every record of a kind in a value, after those found. -/
+partial def recordsOf (k : CellId) (found : Array Value) : Value → Array Value
+  | .cell _ | .blob _ => found
+  | .list items => items.foldl (fun found (_, v) => recordsOf k found v) found
+  | v@(.record fields) =>
+    let found := if v.kind? == some k && !found.contains v then found.push v else found
+    fields.foldl (fun found (_, w) => recordsOf k found w) found
+
+/-- What the projections that are functions give: for each def whose
+projection isn't a layout as it stands, its function run on every record of
+the kind in the document. One that fails is said once, and its records are
+drawn as records. -/
+unsafe def project (rt : Run.Runtime) (functions : Functions) (m : Model) : IO (List (Value × Value × Value)) := do
+  let known ← functions.get
+  let mut kept := []
+  let mut out := #[]
+  for (c, d) in m.doc.cells.toList do
+    if d.kind? == some Kinds.def_ then
+      if let some p := d.field? Kinds.projection then
+        let source := match p with
+          | .cell x => (m.doc.lookup? m.library x).getD p
+          | _ => p
+        if (Node.read source).isNone then
+          match Skinny.function m.doc m.library p with
+          | .error f => IO.eprintln s!"{m.doc.shown m.library c}'s projection: {f.message}"
+          | .ok (commands, term) =>
+            let key := String.join (commands.toList.map toString) ++ " ⊢ " ++ toString term
+            let f ← match known.find? (·.1 == key) with
+              | some (_, f) => pure (some f)
+              | none =>
+                match ← rt.function commands term with
+                | .ok f => pure (some f)
+                | .error ps =>
+                  IO.eprintln s!"{m.doc.shown m.library c}'s projection: {named m ((ps.head?.map (·.message)).getD "it failed")}"
+                  pure none
+            if let some f := f then
+              kept := (key, f) :: kept
+              let records := m.doc.cells.toList.foldl (fun found (_, v) => recordsOf c found v)
+                ((m.doc.root.map (recordsOf c #[])).getD #[])
+              for v in records do
+                out := out.push (source, v, f v)
+  functions.set kept
+  return out.toList
+
 /-- A clipboard: the window's, or one that stands in for it. -/
 structure Clipboard where
   set : String → IO Unit
@@ -72,8 +120,8 @@ def Clipboard.inMemory : IO Clipboard := do
 /-- The edits from outside, for a model: ids topped up, what was copied put
 on the clipboard, a paste asked for read from it, evaluations run if the
 document changed, the file written if a save was asked. -/
-unsafe def edits (rt : Run.Runtime) (memo : Memo) (file : Option System.FilePath) (clipboard : Clipboard)
-    (m : Model) : IO (List (Whole (plain Model))) := do
+unsafe def edits (rt : Run.Runtime) (memo : Memo) (functions : Functions) (file : Option System.FilePath)
+    (clipboard : Clipboard) (m : Model) : IO (List (Whole (plain Model))) := do
   let mut m' := m
   let mut changed := false
   if m.ids.length < 32 then
@@ -95,7 +143,9 @@ unsafe def edits (rt : Run.Runtime) (memo : Memo) (file : Option System.FilePath
     m' := { Model.pasted { m' with pasteAsked := false } text clip with reveal := true }
     changed := true
   if m'.stale then
-    m' := { m' with results := ← evaluate rt memo m', stale := false }
+    let layouts ← project rt functions m'
+    m' := { m' with results := ← evaluate rt memo m', stale := false,
+                    layouts := if layouts = m'.layouts.val then m'.layouts else ⟨layouts⟩ }
     changed := true
   if m.saveAsked then
     if let some path := file then

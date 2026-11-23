@@ -46,6 +46,9 @@ def expression := cell! "ccc55b0eb63b9f564ea74436094d4014"
 /-- A function Lean supplies, which the document calls by its cell
 (`Progred/Skinny.lean`): `{isa: lean function, name, params}`. New here. -/
 def leanFunction := cell! "b8932235933f5a00e98a063a3ff6311d"
+/-- How a kind's records are drawn, on the kind's def: a layout, or a
+function of the record that gives one. The Rust version's cell. -/
+def projection := cell! "873503e2e37a1722a0dd21399be9ee7f"
 /-- A parameter's type, on the parameter's definition, and what a lambda
 returns, on the lambda: Skinny expressions that are types. New here. -/
 def type_ := cell! "c66b9576e877d337b605e9dea35a2c11"
