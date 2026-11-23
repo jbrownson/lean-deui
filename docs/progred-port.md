@@ -148,13 +148,60 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   shapes (`lambda`, `call`, `value wrapper`, `evaluation`), is turned into Lean
   `Syntax` with quotations (`Progred/Lean.lean`), never text, elaborated into an
   environment loaded at run time and run by Lean's interpreter
-  (`Progred/Run.lean`). A syntax node's position is the id of the editor node
-  it came from, so an error comes back at its node.
-- **Monospace text.** Layout is in characters: a pretty-printer chooses inline
-  or stacked forms against a ribbon, as the Rust layout's alternatives do.
-- **The view redraws.** The projection is recomputed and the screen's rows
-  replaced (`Deui.Redraw`, proved correct), only the lines in the viewport.
-  Sharper derivatives come later, where a profile says.
-- **Not yet:** panes, the Raw/Plain/All presets, clipboard, hover and
-  shared-occurrence marks, number scrubbing, name parts and subscripts,
-  projections and offers defined in the document, CAM and Fidget.
+  (`Progred/Run.lean`). A syntax node's position is the number of the value it
+  came from, so an error comes back at its node.
+- **Functions Lean supplies** are cells of the built-in library, each with its
+  parameters as cells, since a call labels its arguments by them: add,
+  subtract, multiply, divide, remainder, equals, less, and, or, not, if,
+  append, length, map, filter, fold, range, show (`Progred/Builtin.lean`).
+- **Monospace text.** Layout is in characters: a doc chooses its inline or its
+  stacked form against a ribbon, as the Rust layout's alternatives do.
+- **The view redraws.** The projection is recomputed on every event and the
+  screen's rows replaced (`Deui.Redraw`, proved correct), only the lines in the
+  window. Sharper derivatives come later, where a profile says.
+- **Outside the pure update:** fresh cell ids, evaluations and saving are done
+  by the window's loop after each batch of events and come back as edits
+  (`Progred/Outside.lean`); an evaluation is remembered by the Lean it became,
+  so an edit elsewhere doesn't run it again.
+
+## Where it stands against the Rust version
+
+Here, and tried (`progred_play` plays keys through the editor with no window;
+the window was driven under Xvfb):
+
+- The data, and the text format: all twelve of the Rust version's example
+  files read, and read back the same after being written.
+- The projection: raw cells, lists, records and blobs; text and numbers; the
+  generic `kind name {fields}` with the kind's fields as places; notebook,
+  section, evaluation, lambda, call (a function with a symbol goes between its
+  two arguments), value wrapper. Inline where it fits, else stacked.
+- Selection as a place; arrows over what's drawn; Tab over holes, list
+  insertion points and records' ends; holes answered by offers as you type
+  (numbers, text, list, record, cell, a new record of a kind, a cell by name,
+  a call to a function, a new named cell; for a label, the kind's fields, the
+  document's labels, a new label); Return, Shift+Return and Ctrl+Return;
+  Backspace to a hole and then away; text, numbers and names typed in place and
+  written through, a run of typing one undo step; undo and redo of the
+  document, the selection and folds; Space folds a cell; clicks select, and
+  take an offer; the wheel scrolls; the window resizes; Ctrl+S saves.
+- The language: literals, lists, lambdas, calls, named values, references, the
+  supplied functions, evaluated by Lean, with the value and its type shown, or
+  the error.
+
+Not here yet:
+
+- Panes, and the Raw, Plain and All presets; the clipboard; hover and the marks
+  on other occurrences of a cell; Cmd+click to pick a cell into a hole; number
+  scrubbing; names made of parts.
+- Projections and offers defined in the document (a def's `projection` and a
+  field's `offers`); libraries as documents.
+- A mark on the node an error is about (the node comes back; it isn't drawn).
+- Definitions that refer to themselves; `match`, `let`, types, structures: the
+  subset is expressions, lambdas and calls.
+- Proportional text and delimiters that span their block.
+- New and Open; a mark that the document has unsaved changes.
+- CAM, Fidget, the web and macOS targets.
+- Derivatives of the projection: every event recomputes it, and its cost on a
+  large document isn't measured.
+- Laws about Progred itself: only deui's are proved (the redraw view is
+  correct, and the screen's copy of the scene stays the scene).

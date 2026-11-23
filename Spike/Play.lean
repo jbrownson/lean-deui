@@ -35,16 +35,22 @@ unsafe def main : IO Unit := do
   let memo ← IO.mkRef []
   let mut m : M := App.start Editor.app {}
   let left := key 63234
+  let _right := key 63235
+  let up := key 63232
   let steps : List (String × List App.Event) := [
-    ("a notebook with an evaluation of 1 + 2", tab ++ type "note" ++ enter ++ type "eva" ++ enter ++ type "add" ++ enter
-      ++ type "1" ++ enter ++ tab ++ type "2" ++ enter),
-    ("a lambda named double, with a parameter x", tab ++ type "lam" ++ enter ++ type "double" ++ enter ++ tab ++ type "x" ++ enter),
-    ("its body: multiply x by 2", tab ++ tab ++ type "mult" ++ enter ++ type "x" ++ enter ++ tab ++ type "2" ++ enter),
-    ("an evaluation calling double on 21", tab ++ type "eva" ++ enter ++ type "doub" ++ enter ++ type "21" ++ enter),
-    ("an evaluation mapping double over a list", tab ++ type "eva" ++ enter ++ type "map" ++ enter ++ type "double" ++ key 63233 ++ enter
-      ++ tab ++ type "[" ++ type "1" ++ enter ++ tab ++ type "2" ++ enter ++ tab ++ type "3" ++ enter),
-    ("a mistake: adding text to a number", tab ++ tab ++ type "eva" ++ enter ++ type "add" ++ enter ++ type "1" ++ enter ++ tab ++ type "\"no" ++ enter),
-    ("left twice, then undo twice and redo", left ++ left ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 3)]
+    ("a notebook; a text entry", tab ++ type "note" ++ enter ++ type "\"hello" ++ enter),
+    ("typing on the text edits it in place", type " world"),
+    ("Enter ends typing; Enter again adds an entry after; a record", enter ++ enter ++ type "{"),
+    ("a new label, size, and its value", type "size" ++ enter ++ type "12" ++ enter),
+    ("Enter on the value adds a field: color, red", enter ++ type "color" ++ enter ++ type "\"red" ++ enter),
+    ("Backspace deletes the value, leaving the record", back),
+    ("Left to the record; Ctrl+Enter adds a field within", left ++ key 13 2 ++ type "tags" ++ enter ++ type "["
+      ++ type "1" ++ enter ++ enter ++ type "2" ++ enter),
+    ("Shift+Enter adds before; Backspace on the hole removes it", key 13 1 ++ type "0" ++ enter ++ enter ++ back),
+    ("up to the first entry, and delete it: a hole, then gone", up ++ back ++ back),
+    ("a named value, and an evaluation of it; Space folds the entry", tab ++ tab ++ tab ++ tab ++ tab ++ type "val" ++ enter ++ type "answer" ++ enter ++ tab ++ type "42" ++ enter
+      ++ tab ++ type "eva" ++ enter ++ type "answ" ++ enter),
+    ("undo three times", key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2)]
   for (name, es) in steps do
     for e in es do
       m := App.step Editor.app m e

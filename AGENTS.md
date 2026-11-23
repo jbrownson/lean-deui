@@ -32,3 +32,18 @@ Read `README.md` first for what the repository is.
 - `native/screen.c` reads Lean values by their layout: a constructor's
   object fields, then its scalars. When a type it reads changes, check the
   layout with `set_option trace.compiler.ir.result true`.
+
+## Progred
+
+- `docs/progred-port.md` is the reading map for `Progred/`: what the Rust
+  version does, what this port decides, and what isn't here yet. Keep its
+  last section true as things land.
+- `Progred` depends on `Deui`, never the reverse. Something Progred needs
+  goes into `Deui` only when it's general.
+- A new cell id in source is minted with `openssl rand -hex 16`, and at run
+  time with `CellId.new`. Never make one up or derive one from a name.
+- `progred_play` plays keys through the editor with no window and prints
+  what it would show; try an editing change there first.
+- Model what you mean: when something new needs saying, give it its own
+  name, step or type, rather than encoding it in a mechanism that means
+  something else.

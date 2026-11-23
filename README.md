@@ -82,6 +82,45 @@ module does.
 - `TodoWindow.lean` (`todo_window`): the to-do list in a window.
 - `TodoLong.lean` (`todo_long`): the to-do list with 10,000 items.
 
+## Progred
+
+`Progred/` is a projectional editor on deui: the core of
+[Progred](https://github.com/jbrownson/progred), in Lean, with a subset of
+Lean as its language in place of Grap. It's a separate library that depends
+on `Deui`, never the reverse. `docs/progred-port.md` says what the Rust
+version does, what this one decides, and what isn't here yet.
+
+- `Gid.lean`, `Kinds.lean`, `Builtin.lean`: the data. A document is a root
+  value and a table of cells; a value is a cell, a blob, a list or a record
+  whose labels are cells. Kinds, literals and names are conventions on top,
+  with the Rust version's cell ids, and the built-in library names them and
+  holds the functions Lean supplies.
+- `GidText.lean`: documents as text files; the Rust version's files read.
+- `Layout.lean`, `Display.lean`: the projection. A value is drawn by the
+  form of its kind (text, numbers, notebook, section, evaluation, lambda,
+  call, value wrapper), the generic `kind name {fields}`, else raw, laid
+  out in characters, on one line where it fits a ribbon, else stacked.
+  Every drawn thing is an occurrence, so selections, keys and clicks find
+  their place.
+- `Model.lean`, `Editing.lean`: the editor: selection, navigation by what's
+  drawn, holes answered by offers as you type, lines typed in place, undo.
+- `Lean.lean`, `Run.lean`: the language. An expression becomes Lean
+  `Syntax`, built with quotations, never text, and is elaborated and run
+  by Lean at run time, in an environment loaded once. Errors come back at
+  the node they're about.
+- `Editor.lean`, `Outside.lean`, `Main.lean`: the editor as a deui app; what
+  reaches it from outside (fresh ids, evaluations' results, saving); and
+  the program.
+
+Keys: Tab and Shift+Tab go to the next and previous place a value can go;
+type to fill it, and Return takes the chosen offer (Up and Down choose).
+`[`, `{` and `(` in an empty place make a list, a record and a cell; a
+leading `"` makes text. The arrows move over what's drawn. Typing on text,
+a number or a name edits it in place. Return on a value adds a peer after
+it (Shift: before), Ctrl+Return adds within it. Backspace deletes a value,
+leaving a hole, and again removes the hole. Space folds or opens a cell.
+Ctrl+Z undoes, Ctrl+Shift+Z redoes, Ctrl+S saves.
+
 ## Building
 
 ```bash
@@ -89,10 +128,16 @@ lake build                                   # checks every law
 lake build todo && .lake/build/bin/todo      # plays events through the to-do list
 lake build todo_window && .lake/build/bin/todo_window   # the to-do list in a window
 lake build todo_long && .lake/build/bin/todo_long       # with 10,000 items
+lake build progred && .lake/build/bin/progred notes.gid # Progred, on a file it makes or opens
+lake build progred_play && .lake/build/bin/progred_play # plays keys through Progred, with no window
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version
-in `lean-toolchain`.
+in `lean-toolchain`. Progred runs Lean at run time, so `lean` has to be on
+the `PATH` when it starts: it loads the toolchain's own library from there.
+Its binary is large (about 235 MB), since Lean itself is linked in.
+`gid_show` prints files as Progred shows them, and `gid_round_trip` checks
+that files read and write back the same.
 
 The window needs, installed on the system, their headers to build and their
 libraries to run:
@@ -106,12 +151,13 @@ libraries to run:
   (`libthorvg-1.so.1`, and `thorvg-1/thorvg_capi.h`): meson's
   `-Dengines=wg -Dloaders=ttf -Dbindings=capi`.
 
-The window's size is fixed: the view shows what fits its height, which it
-takes at launch.
+The to-do list's view shows what fits the window's height at launch, and
+doesn't follow a resize yet; Progred's does.
 
-It looks for Liberation Sans at
-`/usr/share/fonts/liberation/LiberationSans-Regular.ttf`; without it, labels
-are left out, and it says why.
+The to-do list looks for Liberation Sans at
+`/usr/share/fonts/liberation/LiberationSans-Regular.ttf`, and Progred for
+Liberation Mono or DejaVu Sans Mono; without a font, labels are left out,
+and the window says why.
 
 Tested with Lean 4.34.0, SDL 3.4.20, wgpu-native 29.0.1.1 and ThorVG 1.1.4,
 on Mesa's software Vulkan driver, under Xvfb (driven by xdotool) and

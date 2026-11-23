@@ -91,7 +91,11 @@ partial def term (bound : List CellId) (v : Value) : M Term := do
           let body ← supplied f.name (params.map fun (p : Ident) => (⟨p.raw⟩ : Term)).toArray
           return tagged (← `(fun $(params.toArray)* => $body))
         | none => fail n s!"{doc.shown lib c} isn't a function Lean supplies"
-      else term bound d
+      else
+        match d with
+        | .record [(l, _)] =>
+          if l == Kinds.name then fail n s!"{doc.shown lib c} is only a name: it has no value" else term bound d
+        | _ => term bound d
   | .blob _ => fail n "a blob isn't an expression"
   | .list items => do
     let parts ← items.mapM fun (_, x) => term bound x
