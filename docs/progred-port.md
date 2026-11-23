@@ -159,10 +159,20 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
 - **The view redraws.** The projection is recomputed on every event and the
   screen's rows replaced (`Deui.Redraw`, proved correct), only the lines in the
   window. Sharper derivatives come later, where a profile says.
-- **Outside the pure update:** fresh cell ids, evaluations and saving are done
-  by the window's loop after each batch of events and come back as edits
-  (`Progred/Outside.lean`); an evaluation is remembered by the Lean it became,
-  so an edit elsewhere doesn't run it again.
+- **Outside the pure update:** fresh cell ids, evaluations, the clipboard and
+  saving are done by the window's loop after each batch of events and come
+  back as edits (`Progred/Outside.lean`); an evaluation is remembered by the
+  Lean it became, so an edit elsewhere doesn't run it again.
+- **The clipboard holds GID text.** A copy is a document of its own: the
+  selected value as the root, with the definitions it reaches. A paste puts
+  the root at the selection and adds the definitions the document doesn't
+  have, so a reference stays a reference to the same cell. Text that isn't a
+  document pastes as a number or a text; into a line being typed, as typing.
+- **A cell opens one level deep.** A cell with a definition draws open as the
+  root, a list's element, an evaluation's expression or a field of a record
+  with no kind, and not inside another cell's definition; elsewhere, as a
+  call's function or argument or a kind, it's its name. Space folds either
+  way. The Rust version follows cells until a cycle.
 
 ## Where it stands against the Rust version
 
@@ -184,24 +194,33 @@ the window was driven under Xvfb):
   written through, a run of typing one undo step; undo and redo of the
   document, the selection and folds; Space folds a cell; clicks select, and
   take an offer; the wheel scrolls; the window resizes; Ctrl+S saves.
+  Return on a call's argument or an evaluation's expression adds a peer of
+  the entry they're in, not a field on the call. Up and Down go to what's
+  nearest the column.
+- Copy, cut and paste (Ctrl+C, Ctrl+X, Ctrl+V), through the system
+  clipboard.
 - The language: literals, lists, lambdas, calls, named values, references, the
   supplied functions, evaluated by Lean, with the value and its type shown, or
-  the error.
+  Lean's error, in the document's names, and the value it's about on red.
 
 Not here yet:
 
-- Panes, and the Raw, Plain and All presets; the clipboard; hover and the marks
+- Panes, and the Raw, Plain and All presets; hover and the marks
   on other occurrences of a cell; Cmd+click to pick a cell into a hole; number
   scrubbing; names made of parts.
 - Projections and offers defined in the document (a def's `projection` and a
   field's `offers`); libraries as documents.
-- A mark on the node an error is about (the node comes back; it isn't drawn).
 - Definitions that refer to themselves; `match`, `let`, types, structures: the
   subset is expressions, lambdas and calls.
 - Proportional text and delimiters that span their block.
 - New and Open; a mark that the document has unsaved changes.
 - CAM, Fidget, the web and macOS targets.
-- Derivatives of the projection: every event recomputes it, and its cost on a
-  large document isn't measured.
+- Derivatives of the projection: every event recomputes it. Measured by
+  `progred_measure`, laying out and making the rows takes about 17 ms for
+  `toolpaths.gid` (some 1,250 lines) and 7 ms for `iop-tree.gid` (some 700),
+  and an event does it two or three times, since moving the selection lays
+  the document out to find what's drawn. A notebook of a screen or two is
+  well under a millisecond; a large one is where the derivative, or first
+  laying out once per event, would pay.
 - Laws about Progred itself: only deui's are proved (the redraw view is
   correct, and the screen's copy of the scene stays the scene).

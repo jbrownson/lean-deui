@@ -43,7 +43,9 @@ Read `README.md` first for what the repository is.
 - A new cell id in source is minted with `openssl rand -hex 16`, and at run
   time with `CellId.new`. Never make one up or derive one from a name.
 - `progred_play` plays keys through the editor with no window and prints
-  what it would show; try an editing change there first.
+  what it would show; try an editing change there first. With arguments it
+  plays them as keys (`'<tab> note <enter>'`); with none, its own walk,
+  whose output is what to compare before and after a change.
 - Model what you mean: when something new needs saying, give it its own
   name, step or type, rather than encoding it in a mechanism that means
   something else.

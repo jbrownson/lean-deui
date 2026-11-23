@@ -34,6 +34,9 @@ structure Model where
   /-- Whether the document differs from the file, and a save was asked. -/
   dirty : Bool := false
   saveAsked : Bool := false
+  /-- Text waiting to go to the clipboard, and whether a paste was asked. -/
+  copied : Option String := none
+  pasteAsked : Bool := false
   /-- The window, in pixels, and how far the view is scrolled down. -/
   width : Nat := 900
   height : Nat := 700
@@ -162,19 +165,20 @@ def step (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Mod
   | some s => m.select occs[s.occ]!
   | none => if want .insertion then { m with selection := none } else m
 
-/-- The selection moved to the first thing on the line above or below. -/
+/-- The selection moved to the nearest line above or below with something
+on it, to what starts nearest the column it's at. -/
 def stepLine (m : Model) (down : Bool) : Model :=
   let (lines, occs) := m.laid
   let stops := stops lines occs
   match m.here occs stops with
   | none => m.step true
   | some at_ =>
-    let line := stops[at_]!.line
+    let here := stops[at_]!
     let others := stops.toList.filter fun s =>
-      isPlace occs[s.occ]!.kind && (if down then s.line > line else s.line < line)
-    let target := if down then others.head? else
-      -- The first stop of the nearest line above.
-      (others.getLast?).bind fun last => others.find? (·.line == last.line)
+      isPlace occs[s.occ]!.kind && (if down then s.line > here.line else s.line < here.line)
+    let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
+    let target := ((if down then others.head? else others.getLast?).map fun near =>
+      (others.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near)
     match target with
     | some s => m.select occs[s.occ]!
     | none => m

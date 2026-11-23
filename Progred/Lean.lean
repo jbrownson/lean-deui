@@ -23,9 +23,13 @@ structure Failure where
   node : Nat
   message : String
 
+/-- Where a node's value is: its path from the expression, if it's in the
+expression and not in a definition it uses. -/
+abbrev Where := Option Path
+
 structure State where
-  /-- How many nodes have been numbered. -/
-  nodes : Nat := 0
+  /-- Where each numbered node's value is: node `n` is at `nodes[n - 1]`. -/
+  nodes : Array Where := #[]
   /-- The definitions needed, in the order they're elaborated. -/
   commands : Array Syntax := #[]
   defined : List CellId := []
@@ -35,7 +39,10 @@ abbrev M := StateT State (ExceptT Failure Unhygienic)
 
 def fail {α : Type} (node : Nat) (message : String) : M α := throw ⟨node, message⟩
 
-def node : M Nat := modifyGet fun s => (s.nodes + 1, { s with nodes := s.nodes + 1 })
+def node (at_ : Where) : M Nat := modifyGet fun s => (s.nodes.size + 1, { s with nodes := s.nodes.push at_ })
+
+/-- A step further in, where there's a path. -/
+def into (at_ : Where) (steps : List Step) : Where := at_.map (· ++ steps)
 
 def ident (pre : String) (c : CellId) : Ident := mkIdent (Name.mkSimple (pre ++ c.hex))
 
@@ -71,8 +78,8 @@ def cellsOf : Option Value → List CellId
 mutual
 
 /-- A value as a Lean term. `bound` are the parameters in scope. -/
-partial def term (bound : List CellId) (v : Value) : M Term := do
-  let n ← node
+partial def term (bound : List CellId) (at_ : Where) (v : Value) : M Term := do
+  let n ← node at_
   let tagged (t : Term) : Term := ⟨Run.tagOuter n t.raw⟩
   match v with
   | .cell c =>
@@ -94,11 +101,12 @@ partial def term (bound : List CellId) (v : Value) : M Term := do
       else
         match d with
         | .record [(l, _)] =>
-          if l == Kinds.name then fail n s!"{doc.shown lib c} is only a name: it has no value" else term bound d
-        | _ => term bound d
+          if l == Kinds.name then fail n s!"{doc.shown lib c} is only a name: it has no value"
+          else term bound (into at_ [.follow]) d
+        | _ => term bound (into at_ [.follow]) d
   | .blob _ => fail n "a blob isn't an expression"
   | .list items => do
-    let parts ← items.mapM fun (_, x) => term bound x
+    let parts ← items.mapM fun (p, x) => term bound (into at_ [.element p]) x
     return tagged (← `([$(parts.toArray),*]))
   | .record _ =>
     if let some s := v.text? then return tagged ⟨Syntax.mkStrLit s⟩
@@ -114,24 +122,24 @@ partial def term (bound : List CellId) (v : Value) : M Term := do
         match v.field? Kinds.body with
         | none => fail n "a lambda needs a body"
         | some b =>
-          let body ← term (params ++ bound) b
+          let body ← term (params ++ bound) (into at_ [.key Kinds.body]) b
           if params.isEmpty then return tagged body
           return tagged (← `(fun $((params.map (ident "p_")).toArray)* => $body))
-      else if k == Kinds.call then call bound n v
+      else if k == Kinds.call then call bound at_ n v
       else if k == Kinds.valueWrapper then
         match v.field? Kinds.value with
-        | some x => term bound x
+        | some x => term bound (into at_ [.key Kinds.value]) x
         | none => fail n "this has no value yet"
       else if k == Kinds.evaluation then
         match v.field? Kinds.expression with
-        | some x => term bound x
+        | some x => term bound (into at_ [.key Kinds.expression]) x
         | none => fail n "an evaluation needs an expression"
       else fail n s!"a {doc.shown lib k} isn't an expression"
     | none => fail n "a record isn't an expression"
 
 /-- A call: its function applied to its arguments, in the order of the
 function's parameters. -/
-partial def call (bound : List CellId) (n : Nat) (v : Value) : M Term := do
+partial def call (bound : List CellId) (at_ : Where) (n : Nat) (v : Value) : M Term := do
   let tagged (t : Term) : Term := ⟨Run.tagOuter n t.raw⟩
   match v.field? Kinds.function with
   | none => fail n "a call needs a function"
@@ -144,7 +152,7 @@ partial def call (bound : List CellId) (n : Nat) (v : Value) : M Term := do
       | none => []
     let args ← params.mapM fun p =>
       match v.field? p with
-      | some a => term bound a
+      | some a => term bound (into at_ [.key p]) a
       | none => fail n s!"no {doc.shown lib p} given"
     match target with
     | some (c, d) =>
@@ -153,10 +161,10 @@ partial def call (bound : List CellId) (n : Nat) (v : Value) : M Term := do
         | some f => return tagged (← supplied f.name args.toArray)
         | none => fail n s!"{doc.shown lib c} isn't a function Lean supplies"
       else
-        let f ← term bound fn
+        let f ← term bound (into at_ [.key Kinds.function]) fn
         return tagged (← `(($f $(args.toArray)*)))
     | none =>
-      let f ← term bound fn
+      let f ← term bound (into at_ [.key Kinds.function]) fn
       return tagged f
 
 /-- A cell's definition as a Lean definition, elaborated once, before what
@@ -167,17 +175,17 @@ partial def define (c : CellId) (d : Value) : M Unit := do
   if s.defining.contains c then
     fail 0 s!"{doc.shown lib c} is defined by way of itself, which isn't supported yet"
   modify fun s => { s with defining := c :: s.defining }
-  let body ← term [] d
+  let body ← term [] none d
   let command ← `(command| def $(ident "d_" c) := $body)
   modify fun s => { s with commands := s.commands.push command, defined := c :: s.defined }
 
 end
 
-/-- An expression as Lean: the definitions it needs, in order, and its
-term; or what's wrong with it. -/
-def convert (expression : Value) : Except Failure (Array Syntax × Syntax) :=
-  match Unhygienic.run ((term doc lib [] expression).run {}).run with
-  | .ok (t, s) => .ok (s.commands, t.raw)
+/-- An expression as Lean: the definitions it needs, in order, its term,
+and where each numbered node's value is; or what's wrong with it. -/
+def convert (expression : Value) : Except Failure (Array Syntax × Syntax × Array Where) :=
+  match Unhygienic.run ((term doc lib [] (some []) expression).run {}).run with
+  | .ok (t, s) => .ok (s.commands, t.raw, s.nodes)
   | .error f => .error f
 
 /-- Every evaluation's expression in a value. -/

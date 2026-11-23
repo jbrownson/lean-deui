@@ -18,6 +18,7 @@ def wash : UInt32 := 0xC7E2FF
 def accent : UInt32 := 0x007AFF
 def card : UInt32 := 0xF1F4F9
 def chosen : UInt32 := 0xD3E4FF
+def mistaken : UInt32 := 0xFFD9D6
 
 def color : Face → UInt32
   | .ink => 0x212B41
@@ -67,7 +68,15 @@ def lineParts (m : Model) (occs : Array Occ) (line : Line) : List Scene :=
     if s.mark > 0 && !s.text.isEmpty then
       some (.target (x s.col) 0 (px (s.text.length * Model.charWidth)) (px Model.lineHeight) s.mark.toUInt32)
     else none
-  washes ++ texts ++ carets ++ targets
+  -- What an evaluation's error is about, on red.
+  let failed := line.toList.filter fun s => s.mark > 0 && ((occs[s.mark - 1]?).map (·.failed)).getD false
+  let errors : List Scene :=
+    match failed with
+    | [] => []
+    | first :: _ =>
+      let stop := failed.foldl (fun acc s => max acc s.stop) first.col
+      [.fill (x first.col - 2) 1 (px ((stop - first.col) * Model.charWidth) + 4) (px Model.lineHeight - 2) mistaken]
+  errors ++ washes ++ texts ++ carets ++ targets
 
 /-- Where the caret is: its line and column. -/
 def caretAt (lines : Array Line) : Option (Nat × Nat) :=

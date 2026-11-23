@@ -10,7 +10,10 @@ abbrev M := App.Model Editor.app
 def show_ (m : M) : IO Unit := do
   let model := m.state
   let (lines, occs) := model.laid
-  for l in lines do IO.println ("  | " ++ l.plain)
+  for l in lines do
+    IO.println ("  | " ++ l.plain)
+    let failed := l.toList.filter fun s => s.mark > 0 && ((occs[s.mark - 1]?).map (·.failed)).getD false
+    if !failed.isEmpty then IO.println ("  ! " ++ String.join (failed.map (·.text)))
   match model.selection with
   | some sel =>
     let stops := Model.stops lines occs
@@ -30,11 +33,47 @@ def enter := key 13
 def tab := key 9
 def back := key 127
 
-unsafe def main : IO Unit := do
+/-- A step written out: words apart by spaces, each typed as it is, or a
+key in angle brackets: `<enter>`, `<tab>`, `<c-z>`, `<s-enter>`. -/
+def script (s : String) : List App.Event :=
+  (s.splitOn " ").flatMap fun word =>
+    if word.startsWith "<" && word.endsWith ">" && word.length > 2 then
+      let inner := ((word.drop 1).dropEnd 1).toString
+      let (mods, name) : UInt32 × String :=
+        if inner.startsWith "c-s-" then (3, (inner.drop 4).toString)
+        else if inner.startsWith "c-" then (2, (inner.drop 2).toString)
+        else if inner.startsWith "s-" then (1, (inner.drop 2).toString)
+        else (0, inner)
+      match name with
+      | "enter" => key 13 mods
+      | "tab" => key 9 mods
+      | "back" => key 127 mods
+      | "esc" => key 27 mods
+      | "up" => key 63232 mods
+      | "down" => key 63233 mods
+      | "left" => key 63234 mods
+      | "right" => key 63235 mods
+      | "space" => type " "
+      | other => match other.toList with
+        | [c] => key c.toNat.toUInt32 mods
+        | _ => []
+    else type word
+
+/-- With arguments, plays each as a step, from an empty document; with
+none, plays the walk below. -/
+unsafe def main (args : List String) : IO Unit := do
   let rt ← Run.Runtime.load
   let memo ← IO.mkRef []
+  let clipboard ← Outside.Clipboard.inMemory
   let mut m : M := App.start Editor.app {}
-  let left := key 63234
+  if !args.isEmpty then
+    for step in args do
+      for e in script step do
+        m := App.step Editor.app m e
+        m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+      IO.println s!"-- {step}"
+      show_ m
+    return
   let _right := key 63235
   let up := key 63232
   let steps : List (String × List App.Event) := [
@@ -44,18 +83,28 @@ unsafe def main : IO Unit := do
     ("a new label, size, and its value", type "size" ++ enter ++ type "12" ++ enter),
     ("Enter on the value adds a field: color, red", enter ++ type "color" ++ enter ++ type "\"red" ++ enter),
     ("Backspace deletes the value, leaving the record", back),
-    ("Left to the record; Ctrl+Enter adds a field within", left ++ key 13 2 ++ type "tags" ++ enter ++ type "["
+    ("Ctrl+Enter on the record adds a field within", key 13 2 ++ type "tags" ++ enter ++ type "["
       ++ type "1" ++ enter ++ enter ++ type "2" ++ enter),
     ("Shift+Enter adds before; Backspace on the hole removes it", key 13 1 ++ type "0" ++ enter ++ enter ++ back),
     ("up to the first entry, and delete it: a hole, then gone", up ++ back ++ back),
-    ("a named value, and an evaluation of it; Space folds the entry", tab ++ tab ++ tab ++ tab ++ tab ++ type "val" ++ enter ++ type "answer" ++ enter ++ tab ++ type "42" ++ enter
-      ++ tab ++ type "eva" ++ enter ++ type "answ" ++ enter),
-    ("undo three times", key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2)]
+    ("Enter adds an entry: an evaluation of a call", enter ++ type "eva" ++ enter ++ type "add" ++ enter
+      ++ type "1" ++ enter ++ tab ++ type "2" ++ enter),
+    ("the second argument replaced by a text: the error, and what it's about", back ++ type "\"no" ++ enter),
+    ("undo", key 'z'.toNat.toUInt32 2),
+    ("copy the first argument, and paste it as the second", key 63234 ++ key 63234 ++ key 'c'.toNat.toUInt32 2 ++ tab ++ key 'v'.toNat.toUInt32 2),
+    ("up into the record; its 12 cut, and pasted as an entry after the record", up ++ key 'x'.toNat.toUInt32 2
+      ++ enter ++ key 'v'.toNat.toUInt32 2)]
   for (name, es) in steps do
     for e in es do
       m := App.step Editor.app m e
-      m := (App.edited Editor.app m (← Outside.edits rt memo none m.state)).1
+      m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
     IO.println s!"-- {name}"
     show_ m
+  clipboard.set "from elsewhere"
+  for e in enter ++ key 'v'.toNat.toUInt32 2 do
+    m := App.step Editor.app m e
+    m := (App.edited Editor.app m (← Outside.edits rt memo none clipboard m.state)).1
+  IO.println "-- text from elsewhere pasted as a new entry"
+  show_ m
   IO.println "-- as a file"
   IO.println (GidText.write m.state.doc m.state.library)

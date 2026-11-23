@@ -96,6 +96,8 @@ unsafe def Runtime.eval (rt : Runtime) (commands : Array Syntax) (term : Syntax)
     let e ← elabTerm t none
     synthesizeSyntheticMVarsNoPostponing
     let e ← instantiateMVars e
+    -- What couldn't be worked out is logged, not thrown: that's the error.
+    if (← MonadLog.hasErrors) then return default
     if e.hasExprMVar then
       throwErrorAt term "this doesn't have a definite type: its parts don't fit together"
     let type ← instantiateMVars (← inferType e)

@@ -62,7 +62,7 @@ module does.
   gives, which `screen.c` applies as `SceneEdit.apply` does, reading them
   as Lean values; ThorVG keeps a paint for each part that's drawn, and a
   frame only asks it to draw them. [SDL3](https://libsdl.org) gives the
-  window and its events, [wgpu-native](https://github.com/gfx-rs/wgpu-native)
+  window, its events and the clipboard, [wgpu-native](https://github.com/gfx-rs/wgpu-native)
   WebGPU, and [ThorVG](https://www.thorvg.org)'s WebGPU engine draws. Outside
   the proofs: what's proved stops at the scene edits sent to the screen.
 - `Axioms.lean`: the laws' axioms, checked by `lake build`, which fails on
@@ -107,10 +107,10 @@ version does, what this one decides, and what isn't here yet.
 - `Lean.lean`, `Run.lean`: the language. An expression becomes Lean
   `Syntax`, built with quotations, never text, and is elaborated and run
   by Lean at run time, in an environment loaded once. Errors come back at
-  the node they're about.
+  the node they're about, which is drawn on red.
 - `Editor.lean`, `Outside.lean`, `Main.lean`: the editor as a deui app; what
-  reaches it from outside (fresh ids, evaluations' results, saving); and
-  the program.
+  reaches it from outside (fresh ids, evaluations' results, the clipboard,
+  saving); and the program.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).
@@ -119,7 +119,8 @@ leading `"` makes text. The arrows move over what's drawn. Typing on text,
 a number or a name edits it in place. Return on a value adds a peer after
 it (Shift: before), Ctrl+Return adds within it. Backspace deletes a value,
 leaving a hole, and again removes the hole. Space folds or opens a cell.
-Ctrl+Z undoes, Ctrl+Shift+Z redoes, Ctrl+S saves.
+Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste a value, as GID text on the
+system clipboard. Ctrl+Z undoes, Ctrl+Shift+Z redoes, Ctrl+S saves.
 
 ## Building
 
@@ -130,6 +131,7 @@ lake build todo_window && .lake/build/bin/todo_window   # the to-do list in a wi
 lake build todo_long && .lake/build/bin/todo_long       # with 10,000 items
 lake build progred && .lake/build/bin/progred notes.gid # Progred, on a file it makes or opens
 lake build progred_play && .lake/build/bin/progred_play # plays keys through Progred, with no window
+.lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version

@@ -51,6 +51,14 @@ opaque Window.draw (w : @& Window) (background : UInt32) : IO Unit
 @[extern "deui_window_close"]
 opaque Window.close (w : @& Window) : IO Unit
 
+/-- Puts text on the clipboard. A window must be open. -/
+@[extern "deui_clipboard_set"]
+opaque clipboardSet (text : @& String) : IO Unit
+
+/-- The clipboard's text: empty when it holds none. A window must be open. -/
+@[extern "deui_clipboard_get"]
+opaque clipboardGet : IO String
+
 /-! ## Events
 
 Each event's words, after its length: its kind, then its fields, a

@@ -64,3 +64,7 @@ lean_exe progred where
   supportInterpreter := true
   moreLinkObjs := #[libscreen]
   moreLinkArgs := #["-ldl"]
+
+/-- Times Progred's projection on files. -/
+lean_exe progred_measure where
+  root := `Spike.Measure

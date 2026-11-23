@@ -53,12 +53,15 @@ inductive OccKind where
 structure Occ where
   path : Path
   kind : OccKind
+  /-- Whether an evaluation's error is about this value. -/
+  failed : Bool := false
   deriving Inhabited
 
-/-- What an evaluation gave: a value and its type, or what went wrong. -/
+/-- What an evaluation gave: a value and its type, or what went wrong, and
+the value it's about, as a path from the expression, if it's in it. -/
 inductive Outcome where
   | value (shown type : String)
-  | failed (message : String)
+  | failed (message : String) (at_ : Option Path := none)
   deriving Inhabited, BEq
 
 /-- What the projection is of, besides the document. -/
@@ -73,12 +76,18 @@ structure Shown where
 
 namespace Display
 
-abbrev M := StateM (Array Occ)
+/-- What drawing gathers: the occurrences, and the paths evaluations'
+errors are about, noted before what's there is drawn. -/
+structure Drawn where
+  occs : Array Occ := #[]
+  errors : List Path := []
+
+abbrev M := StateM Drawn
 
 /-- A doc, marked as an occurrence. -/
 def occ (path : Path) (kind : OccKind) (d : Doc) : M Doc := do
-  modify (·.push ⟨path, kind⟩)
-  return .mark (← get).size d
+  modify fun st => { st with occs := st.occs.push ⟨path, kind, kind == .value && st.errors.contains path⟩ }
+  return .mark (← get).occs.size d
 
 def t (s : String) (face : Face := .ink) : Doc := .text s face
 def delim (s : String) : Doc := .text s .delimiter
@@ -112,19 +121,25 @@ def hole (path : Path) : M Doc :=
     | none => occ path .hole (dim "_")
 
 /-- Whether a cell is drawn open at a path: as the user set it, else open
-when it has a definition of the document's that's more than a name, is the
-root or a list's element, an entry, and isn't inside another cell's
-definition. As a field's value, a function called or a kind, it shows as
-its name. -/
+when it has a definition of the document's that's more than a name, isn't
+inside another cell's definition, and is the root, a list's element, an
+evaluation's expression, or a field of a record with no kind. Elsewhere, as
+a call's function or argument or a kind, it shows as its name. -/
 def isOpen (path : Path) (c : CellId) : Bool :=
   match s.folds.find? (·.1 == path) with
   | some (_, closed) => !closed && (s.doc.lookup? s.library c).isSome
   | none =>
-    match s.doc.definition? c with
-    | some (.record [(l, _)]) => l != Kinds.name
-    | some _ =>
-      !(path.contains .follow) && (match path.getLast? with | some (.element _) | .none => true | _ => false)
-    | none => false
+    let more := match s.doc.definition? c with
+      | some (.record [(l, _)]) => l != Kinds.name
+      | some _ => true
+      | none => false
+    more && !(path.contains .follow) &&
+      match path.getLast? with
+      | none | some (.element _) => true
+      | some (.key l) =>
+        l == Kinds.expression ||
+          (l != Kinds.isa && ((s.doc.find? s.library path.dropLast).bind (·.kind?)).isNone)
+      | some .follow => false
 
 /-- A record's fields in the order raw shows them: named labels by name,
 then the rest by id. -/
@@ -146,6 +161,16 @@ indented between its delimiters. -/
 def container (open_ close : String) (flat stacked : List Doc) : Doc :=
   .alt (.row ([delim open_] ++ Doc.sep (dim ", ") flat ++ [delim close]))
     (.col [delim open_, .indent 2 (.col stacked), delim close])
+
+/-- A message's first line and the indented lines that continue it, on one
+line, cut short if it's long. -/
+def brief (message : String) : String :=
+  let line := match message.splitOn "\n" with
+    | [] => ""
+    | first :: rest =>
+      let more := rest.takeWhile fun l => l.startsWith " " && !l.trimAscii.isEmpty
+      " ".intercalate ((first :: more).map (·.trimAscii.toString))
+  if line.length > 140 then (line.take 139).toString ++ "…" else line
 
 mutual
 
@@ -351,12 +376,17 @@ partial def section_ (path : Path) (v : Value) : M Doc := do
 /-- An evaluation: its expression, then what it gives. -/
 partial def evaluation (path : Path) (v : Value) : M Doc := do
   let at_ := path ++ [.key Kinds.expression]
+  let outcome : Option Outcome :=
+    (v.field? Kinds.expression).bind fun e => (s.results.find? (·.1 == e)).map (·.2)
+  match outcome with
+  | some (Outcome.failed _ (some rel)) => modify fun st => { st with errors := (at_ ++ rel) :: st.errors }
+  | _ => pure ()
   let expression ← value at_ (v.field? Kinds.expression)
   let result : Doc :=
-    match (v.field? Kinds.expression).bind fun e => s.results.find? (·.1 == e) with
-    | some (_, .value shown type) =>
+    match outcome with
+    | some (.value shown type) =>
       if shown.isEmpty then .row [.text type .dim] else .row [.text shown .result, .text (" : " ++ type) .dim]
-    | some (_, .failed message) => .text ((message.splitOn "\n").headD "") .error
+    | some (.failed message _) => .text (brief message) .error
     | none => dim "…"
   let marked ← occ (path ++ [.key Kinds.evaluation]) .computed result
   let flat := Doc.row [expression, dim " → ", marked]
@@ -414,8 +444,8 @@ def document : M Doc := value s [] s.doc.root
 /-- The document laid out: its lines, and the occurrences their spans are
 marked with (mark `n` is occurrence `n - 1`). -/
 def laid (ribbon : Nat) : Array Line × Array Occ :=
-  let (doc, occs) := (document s).run #[]
-  (Doc.lines ribbon 0 0 0 doc, occs)
+  let (doc, drawn) := (document s).run {}
+  (Doc.lines ribbon 0 0 0 doc, drawn.occs)
 
 end Display
 

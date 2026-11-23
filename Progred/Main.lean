@@ -31,4 +31,4 @@ unsafe def main (args : List String) : IO Unit := do
     | some path => s!"Progred: {path}"
     | none => "Progred"
   Deui.Screen.run Editor.app title font 1000 720 Editor.paper { doc, width := 1000, height := 720 }
-    (outside := some (Outside.edits rt memo file))
+    (outside := some (Outside.edits rt memo file ⟨Deui.Screen.clipboardSet, Deui.Screen.clipboardGet⟩))

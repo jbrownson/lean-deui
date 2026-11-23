@@ -1,4 +1,5 @@
 import Progred.Model
+import Progred.GidText
 import Deui.App
 
 /-!
@@ -327,8 +328,10 @@ partial def within (m : Model) (path : Path) (first : Bool) : Model :=
   | _ => m
 
 /-- A peer of the selected value: an element after it in its list, or
-before; a field on the record holding it. -/
-def peer (m : Model) (path : Path) (before : Bool) : Model :=
+before; a field on the plain record holding it. A value held by a record
+of a kind, a call's argument or an evaluation's expression, has no peers of
+its own: the peer is the record's; and a cell's definition's is the cell's. -/
+partial def peer (m : Model) (path : Path) (before : Bool) : Model :=
   match parent? path with
   | some (holder, .element p) =>
     let positions := positionsAt m holder
@@ -336,8 +339,11 @@ def peer (m : Model) (path : Path) (before : Bool) : Model :=
     let later := (positions.filter (Position.lt p ·)).head?
     let new := if before then Position.between earlier (some p) else Position.between (some p) later
     m.openAt (holder ++ [.element new])
-  | some (holder, .key _) => m.openAt holder .label
-  | _ => within m path false
+  | some (holder, .key _) =>
+    if ((m.at? holder).bind (·.kind?)).isSome && !holder.isEmpty then peer m holder before
+    else m.openAt holder .label
+  | some (holder, .follow) => peer m holder before
+  | none => within m path false
 
 /-- Whether a hole is drawn at a path with no value: a kind's field, or a
 list's element being added. -/
@@ -348,20 +354,91 @@ def holeDrawn (m : Model) (path : Path) : Bool :=
   | some (_, .follow) => true
   | none => true
 
+/-- The selection resting on a path, or on the nearest thing above it
+that's drawn. -/
+partial def restDrawn (m : Model) (path : Path) : Model :=
+  let rested := m.rest path
+  let (lines, occs) := rested.laid
+  if (rested.here occs (stops lines occs)).isSome || path.isEmpty then rested else restDrawn m path.dropLast
+
 /-- The selected value deleted, its place left selected as a hole; on a
-hole, the hole removed, the selection going to what held it. -/
+hole, the hole removed, the selection going to the element after it or
+before, or to what held it. -/
 def delete (m : Model) (sel : Selection) : Model :=
   if (m.at? sel.path).isSome && sel.stage == .edge then
     match m.doc.delete sel.path with
     | some doc =>
       let m := m.write doc
       if holeDrawn m sel.path then { m with selection := some { path := sel.path, stage := .pending } }
-      else m.rest sel.path.dropLast
+      else restDrawn m sel.path.dropLast
     | none => m
   else
     match parent? sel.path with
-    | some (holder, _) => m.rest (if sel.stage == .label then sel.path else holder)
+    | some (holder, step) =>
+      if sel.stage == .label then m.rest sel.path
+      else
+        match step with
+        | .element p =>
+          -- A list's hole: on to the element after it, or before.
+          let positions := positionsAt m holder
+          match (positions.filter (Position.lt p ·)).head? <|> (positions.filter (Position.lt · p)).getLast? with
+          | some q => m.rest (holder ++ [.element q])
+          | none => restDrawn m holder
+        | _ => restDrawn m holder
     | none => { m with selection := none }
+
+/-! ## The clipboard -/
+
+/-- The definitions cells reach, from the document. -/
+partial def reach (d : Document) (todo : List CellId) (seen : Std.TreeMap CellId Value := {}) :
+    Std.TreeMap CellId Value :=
+  match todo with
+  | [] => seen
+  | c :: rest =>
+    if seen.contains c then reach d rest seen
+    else match d.cells.get? c with
+      | some v => reach d (GidText.mentions v ++ rest) (seen.insert c v)
+      | none => reach d rest seen
+
+/-- The selected value as a document of its own, as text: the value as the
+root, with the definitions it reaches. -/
+def clipping (m : Model) : Option String :=
+  m.selection.bind fun sel => (m.at? sel.path).map fun v =>
+    GidText.write { root := some v, cells := reach m.doc (GidText.mentions v) } m.library
+
+/-- What text that isn't a document is, as a value: a number if it reads
+as one, or a text. -/
+def plainValue (text : String) : Value :=
+  let trimmed := text.trimAscii.toString
+  match parseNat? trimmed with
+  | some n => Value.u64 n
+  | none => match parseFloat? trimmed with
+    | some x => Value.f64 x
+    | none => Value.text text
+
+/-- The clipboard's text pasted: into the line being typed; or as a value
+at the selection, in place of what's there: the root of the document the
+text is, with the definitions it brings that the document doesn't have, or
+the text itself. -/
+def pasted (m : Model) (text : String) (clip : Option Document) : Model :=
+  match m.selection with
+  | none => m
+  | some sel =>
+    let typing := match sel.editing with
+      | some e => !e.picker || !e.text.isEmpty || sel.stage == Stage.label
+      | none => false
+    if typing then (text.toList.filter fun c => c != '\n' && c != '\r').foldl typed m
+    else if sel.stage == Stage.label || !m.doc.writable m.library sel.path then m
+    else
+      let (v, cells) : Value × Std.TreeMap CellId Value :=
+        match clip.bind fun d => d.root.map (·, d.cells) with
+        | some found => found
+        | none => (plainValue text, {})
+      let merged := cells.foldl (init := m.doc.cells) fun (acc : Std.TreeMap CellId Value) c d =>
+        if acc.contains c then acc else acc.insert c d
+      match ({ m.doc with cells := merged } : Document).set sel.path v with
+      | some doc => (m.write doc).rest sel.path
+      | none => m
 
 /-- Typing ended: the line keeps what was written; a query goes, leaving
 the value it was over, or the hole. -/
@@ -386,6 +463,15 @@ def key (m : Model) (code mods : UInt32) : Model :=
   if command && code == 'z'.toNat.toUInt32 then (if shift then m.redone else m.undone)
   else if command && code == 'y'.toNat.toUInt32 then m.redone
   else if command && code == 's'.toNat.toUInt32 then { m with saveAsked := true }
+  else if command && code == 'c'.toNat.toUInt32 then { m with copied := clipping m }
+  else if command && code == 'v'.toNat.toUInt32 then { m with pasteAsked := true }
+  else if command && code == 'x'.toNat.toUInt32 then
+    match m.selection with
+    | some sel =>
+      if sel.editing.isNone && sel.stage == .edge && m.doc.writable m.library sel.path then
+        delete { m with copied := clipping m } sel
+      else m
+    | none => m
   else
   match m.selection with
   | none =>

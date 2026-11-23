@@ -54,6 +54,8 @@ static __typeof__(SDL_WaitEventTimeout)* ds_SDL_WaitEventTimeout;
 static __typeof__(SDL_PollEvent)* ds_SDL_PollEvent;
 static __typeof__(SDL_LoadFile)* ds_SDL_LoadFile;
 static __typeof__(SDL_free)* ds_SDL_free;
+static __typeof__(SDL_SetClipboardText)* ds_SDL_SetClipboardText;
+static __typeof__(SDL_GetClipboardText)* ds_SDL_GetClipboardText;
 static __typeof__(wgpuCreateInstance)* ds_wgpuCreateInstance;
 static __typeof__(wgpuInstanceCreateSurface)* ds_wgpuInstanceCreateSurface;
 static __typeof__(wgpuInstanceRequestAdapter)* ds_wgpuInstanceRequestAdapter;
@@ -120,6 +122,8 @@ static bool ds_load(void) {
   ok = ok && (ds_SDL_PollEvent = (__typeof__(SDL_PollEvent)*)dlsym(libsdl, "SDL_PollEvent"));
   ok = ok && (ds_SDL_LoadFile = (__typeof__(SDL_LoadFile)*)dlsym(libsdl, "SDL_LoadFile"));
   ok = ok && (ds_SDL_free = (__typeof__(SDL_free)*)dlsym(libsdl, "SDL_free"));
+  ok = ok && (ds_SDL_SetClipboardText = (__typeof__(SDL_SetClipboardText)*)dlsym(libsdl, "SDL_SetClipboardText"));
+  ok = ok && (ds_SDL_GetClipboardText = (__typeof__(SDL_GetClipboardText)*)dlsym(libsdl, "SDL_GetClipboardText"));
   ok = ok && (ds_wgpuCreateInstance = (__typeof__(wgpuCreateInstance)*)dlsym(libwgpu, "wgpuCreateInstance"));
   ok = ok && (ds_wgpuInstanceCreateSurface = (__typeof__(wgpuInstanceCreateSurface)*)dlsym(libwgpu, "wgpuInstanceCreateSurface"));
   ok = ok && (ds_wgpuInstanceRequestAdapter = (__typeof__(wgpuInstanceRequestAdapter)*)dlsym(libwgpu, "wgpuInstanceRequestAdapter"));
@@ -368,6 +372,33 @@ lean_obj_res deui_window_font(b_lean_obj_arg w, b_lean_obj_arg path, lean_obj_ar
   ds.font = ds_tvg_font_load_data("deui", data, (uint32_t)size, "ttf", true) == TVG_RESULT_SUCCESS;
   ds_SDL_free(data);
   return ds.font ? ds_unit() : ds_fail("screen: ThorVG couldn't read the font");
+}
+
+// The clipboard
+// -------------
+
+// Puts text on the clipboard.
+lean_obj_res deui_clipboard_set(b_lean_obj_arg text, lean_obj_arg world) {
+  if (!ds.open) {
+    return ds_fail("screen: the window is closed");
+  }
+  if (!ds_SDL_SetClipboardText(lean_string_cstr(text))) {
+    return ds_sdl_fail("the clipboard");
+  }
+  return ds_unit();
+}
+
+// The clipboard's text: empty when it holds none.
+lean_obj_res deui_clipboard_get(lean_obj_arg world) {
+  if (!ds.open) {
+    return ds_fail("screen: the window is closed");
+  }
+  char* text = ds_SDL_GetClipboardText();
+  lean_obj_res s = lean_mk_string(text != NULL ? text : "");
+  if (text != NULL) {
+    ds_SDL_free(text);
+  }
+  return lean_io_result_mk_ok(s);
 }
 
 // Events
