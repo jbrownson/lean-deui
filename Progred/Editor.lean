@@ -4,8 +4,9 @@ import Deui.Redraw
 /-!
 The editor as a deui app: its state is the model, and its view the lines
 of the layout that the window shows, each a row of the scene: the
-selection's wash, the text, a caret, and a target on each span, tagged
-with its occurrence, so a click finds what it's on. Over them, the card of
+selection's wash, a mark on the other places the selected cell is, the
+text, a caret, and a target on each span, tagged with its occurrence, so a
+click finds what it's on. Over them, the card of
 offers for what's being typed.
 -/
 
@@ -19,6 +20,7 @@ def accent : UInt32 := 0x007AFF
 def card : UInt32 := 0xF1F4F9
 def chosen : UInt32 := 0xD3E4FF
 def mistaken : UInt32 := 0xFFD9D6
+def same : UInt32 := 0xE4ECF7
 
 def color : Face → UInt32
   | .ink => 0x212B41
@@ -45,6 +47,21 @@ def covers (sel : Selection) (o : Occ) : Bool :=
   match sel.stage with
   | .label => o.kind == .fieldEnd && o.path == sel.path
   | _ => sel.path.isPrefixOf o.path && !(o.kind == .label && o.path == sel.path) && o.kind != .fieldEnd
+
+/-- The cell the selection is on: the cell selected, or the one whose name
+is. -/
+def selectedCell (m : Model) : Option CellId :=
+  m.selection.bind fun sel =>
+    if sel.stage != Stage.edge then none
+    else
+      let cellAt (path : Path) : Option CellId :=
+        match m.at? path with
+        | some (.cell c) => some c
+        | _ => none
+      (cellAt sel.path).orElse fun _ =>
+        if sel.path.length ≥ 2 && sel.path.drop (sel.path.length - 2) == [.follow, .key Kinds.name] then
+          cellAt (sel.path.take (sel.path.length - 2))
+        else none
 
 /-- One line, as a row's parts, from the row's top left. -/
 def lineParts (m : Model) (occs : Array Occ) (line : Line) : List Scene :=
@@ -76,7 +93,21 @@ def lineParts (m : Model) (occs : Array Occ) (line : Line) : List Scene :=
     | first :: _ =>
       let stop := failed.foldl (fun acc s => max acc s.stop) first.col
       [.fill (x first.col - 2) 1 (px ((stop - first.col) * Model.charWidth) + 4) (px Model.lineHeight - 2) mistaken]
-  errors ++ washes ++ texts ++ carets ++ targets
+  -- The other places the selected cell is, marked: where it's a value, and
+  -- where it's a field's label.
+  let others : List Scene :=
+    match selectedCell m with
+    | none => []
+    | some c => line.toList.filterMap fun s =>
+      match occs[s.mark - 1]? with
+      | some o =>
+        let isIt := (o.kind == .value && m.at? o.path == some (.cell c)) ||
+          (o.kind == .label && o.path.getLast? == some (.key c))
+        if s.mark > 0 && !s.text.isEmpty && !selected s && isIt then
+          some (.fill (x s.col - 2) 1 (px (s.text.length * Model.charWidth) + 4) (px Model.lineHeight - 2) same)
+        else none
+      | none => none
+  errors ++ others ++ washes ++ texts ++ carets ++ targets
 
 /-- Where the caret is: its line and column. -/
 def caretAt (lines : Array Line) : Option (Nat × Nat) :=

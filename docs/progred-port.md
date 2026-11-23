@@ -199,15 +199,16 @@ the window was driven under Xvfb):
   nearest the column.
 - Copy, cut and paste (Ctrl+C, Ctrl+X, Ctrl+V), through the system
   clipboard.
+- With a cell selected, or its name, the other places it is are marked:
+  where it's a value, and where it's a field's label.
 - The language: literals, lists, lambdas, calls, named values, references, the
   supplied functions, evaluated by Lean, with the value and its type shown, or
   Lean's error, in the document's names, and the value it's about on red.
 
 Not here yet:
 
-- Panes, and the Raw, Plain and All presets; hover and the marks
-  on other occurrences of a cell; Cmd+click to pick a cell into a hole; number
-  scrubbing; names made of parts.
+- Panes, and the Raw, Plain and All presets; hover; Cmd+click to pick a cell
+  into a hole; number scrubbing; names made of parts.
 - Projections and offers defined in the document (a def's `projection` and a
   field's `offers`); libraries as documents.
 - Definitions that refer to themselves; `match`, `let`, types, structures: the
