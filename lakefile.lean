@@ -56,6 +56,7 @@ lean_exe gid_show where
 /-- Plays keys through Progred with no window. -/
 lean_exe progred_play where
   root := `Spike.Play
+  supportInterpreter := true
 
 /-- Progred, in a window. -/
 lean_exe progred where

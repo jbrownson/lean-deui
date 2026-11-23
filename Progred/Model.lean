@@ -93,23 +93,27 @@ structure Stop where
   occ : Nat
   line : Nat
   col : Nat
+  /-- Whether it's a place with no width: a point between things. -/
+  point : Bool := false
   deriving Inhabited
 
 /-- Each occurrence that's drawn, where it starts, in reading order: by
-line, then column, and a container before what it holds. -/
+line, then column; where two start together, a point before a value, and a
+container before what it holds. -/
 def stops (lines : Array Line) (occs : Array Occ) : Array Stop :=
-  let first : Array (Option (Nat × Nat)) := Id.run do
+  let first : Array (Option (Nat × Nat × Bool)) := Id.run do
     let mut first := Array.replicate occs.size none
     for i in [0:lines.size] do
       for span in lines[i]! do
         if span.mark > 0 && span.mark ≤ occs.size then
           if first[span.mark - 1]!.isNone then
-            first := first.set! (span.mark - 1) (some (i, span.col))
+            first := first.set! (span.mark - 1) (some (i, span.col, span.text.isEmpty && span.face != .caret))
     return first
   let found := (List.range occs.size).filterMap fun i =>
-    first[i]!.map fun (line, col) => (⟨i, line, col⟩ : Stop)
+    first[i]!.map fun (line, col, point) => (⟨i, line, col, point⟩ : Stop)
   found.toArray.qsort fun a b =>
-    a.line < b.line || (a.line == b.line && (a.col < b.col || (a.col == b.col && a.occ > b.occ)))
+    a.line < b.line || (a.line == b.line && (a.col < b.col ||
+      (a.col == b.col && ((a.point && !b.point) || (a.point == b.point && a.occ > b.occ)))))
 
 /-- Whether an occurrence is the selection's. -/
 def isSelected (sel : Selection) (o : Occ) : Bool :=

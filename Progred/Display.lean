@@ -112,13 +112,19 @@ def hole (path : Path) : M Doc :=
     | none => occ path .hole (dim "_")
 
 /-- Whether a cell is drawn open at a path: as the user set it, else open
-when it has a definition of the document's, isn't a kind, and isn't inside
-another cell's definition. -/
+when it has a definition of the document's that's more than a name, is the
+root or a list's element, an entry, and isn't inside another cell's
+definition. As a field's value, a function called or a kind, it shows as
+its name. -/
 def isOpen (path : Path) (c : CellId) : Bool :=
   match s.folds.find? (·.1 == path) with
   | some (_, closed) => !closed && (s.doc.lookup? s.library c).isSome
   | none =>
-    (s.doc.definition? c).isSome && !(path.contains .follow) && path.getLast? != some (.key Kinds.isa)
+    match s.doc.definition? c with
+    | some (.record [(l, _)]) => l != Kinds.name
+    | some _ =>
+      !(path.contains .follow) && (match path.getLast? with | some (.element _) | .none => true | _ => false)
+    | none => false
 
 /-- A record's fields in the order raw shows them: named labels by name,
 then the rest by id. -/
@@ -352,7 +358,7 @@ partial def evaluation (path : Path) (v : Value) : M Doc := do
       if shown.isEmpty then .row [.text type .dim] else .row [.text shown .result, .text (" : " ++ type) .dim]
     | some (_, .failed message) => .text ((message.splitOn "\n").headD "") .error
     | none => dim "…"
-  let marked ← occ (path ++ [.key Kinds.expression, .follow]) .computed result
+  let marked ← occ (path ++ [.key Kinds.evaluation]) .computed result
   let flat := Doc.row [expression, dim " → ", marked]
   let stacked := Doc.col [expression, .indent 2 (.row [dim "→ ", marked])]
   return .alt flat stacked

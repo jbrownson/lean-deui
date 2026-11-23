@@ -164,12 +164,22 @@ def valueOffers (m : Model) (path : Path) (query : String) : List Offer :=
       ⟨name, "kind", true, fun m => m.putNew path k⟩
     let cells : List Offer := (namedCells m).flatMap fun (c, name, v) =>
       let reference : Offer := ⟨name, (v.kind?.map (m.doc.shown m.library)).getD "cell", false,
-        fun m => m.put path (.cell c)⟩
+        fun m => match m.doc.set path (.cell c) with
+          | some doc => (m.write doc).rest path
+          | none => m⟩
       if v.kind? == some Kinds.lambda || v.kind? == some Kinds.leanFunction then
         [⟨name, "call", false, fun m => m.put path (Value.ofKind Kinds.call [(Kinds.function, .cell c)])⟩, reference]
       else [reference]
     let ranked (rank : Nat) := (makers ++ kinds ++ cells).filter fun o => matchRank query o.text == some rank
-    readings ++ ranked 0 ++ ranked 1 ++ (if query.isEmpty then [] else [text query])
+    -- A new cell with the query as its name: how a parameter is made.
+    let named : List Offer :=
+      if query.isEmpty then []
+      else [⟨query, "cell", true, fun m =>
+        let (id, m) := m.fresh
+        match m.doc.set path (.cell id) with
+        | some doc => (m.write { doc with cells := doc.cells.insert id (Builtin.named query) }).rest path
+        | none => m⟩]
+    readings ++ ranked 0 ++ ranked 1 ++ named ++ (if query.isEmpty then [] else [text query])
 
 /-- The offers for a new field's label on the record at a path: its kind's
 fields it lacks, the document's cells that are only names, and a new label

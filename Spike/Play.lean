@@ -1,4 +1,4 @@
-import Progred.Editor
+import Progred.Outside
 
 /-! Plays keys through the editor with no window, printing what it would
 show: the lines, the selection, and the offers. -/
@@ -30,25 +30,25 @@ def enter := key 13
 def tab := key 9
 def back := key 127
 
-def main : IO Unit := do
-  let ids ← (List.range 200).mapM fun _ => CellId.new
-  let mut m : M := App.start Editor.app { ids }
+unsafe def main : IO Unit := do
+  let rt ← Run.Runtime.load
+  let memo ← IO.mkRef []
+  let mut m : M := App.start Editor.app {}
+  let left := key 63234
   let steps : List (String × List App.Event) := [
-    ("start", []),
-    ("Tab", tab),
-    ("type note", type "note"),
-    ("Enter", enter),
-    ("type eva, Enter", type "eva" ++ enter),
-    ("type add, Enter", type "add" ++ enter),
-    ("type 1, Enter", type "1" ++ enter),
-    ("Tab, type 2, Enter", tab ++ type "2" ++ enter),
-    ("Tab (after the evaluation), type val, Enter", tab ++ type "val" ++ enter),
-    ("type double, Enter", type "double" ++ enter),
-    ("type lam, Enter", type "lam" ++ enter),
-    ("Tab, type x, Enter", tab ++ type "x" ++ enter),
-    ("Left ×4, undo ×2, redo", key 63234 ++ key 63234 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 3)]
+    ("a notebook with an evaluation of 1 + 2", tab ++ type "note" ++ enter ++ type "eva" ++ enter ++ type "add" ++ enter
+      ++ type "1" ++ enter ++ tab ++ type "2" ++ enter),
+    ("a lambda named double, with a parameter x", tab ++ type "lam" ++ enter ++ type "double" ++ enter ++ tab ++ type "x" ++ enter),
+    ("its body: multiply x by 2", tab ++ tab ++ type "mult" ++ enter ++ type "x" ++ enter ++ tab ++ type "2" ++ enter),
+    ("an evaluation calling double on 21", tab ++ type "eva" ++ enter ++ type "doub" ++ enter ++ type "21" ++ enter),
+    ("an evaluation mapping double over a list", tab ++ type "eva" ++ enter ++ type "map" ++ enter ++ type "double" ++ key 63233 ++ enter
+      ++ tab ++ type "[" ++ type "1" ++ enter ++ tab ++ type "2" ++ enter ++ tab ++ type "3" ++ enter),
+    ("a mistake: adding text to a number", tab ++ tab ++ type "eva" ++ enter ++ type "add" ++ enter ++ type "1" ++ enter ++ tab ++ type "\"no" ++ enter),
+    ("left twice, then undo twice and redo", left ++ left ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 2 ++ key 'z'.toNat.toUInt32 3)]
   for (name, es) in steps do
-    m := play m es
+    for e in es do
+      m := App.step Editor.app m e
+      m := (App.edited Editor.app m (← Outside.edits rt memo none m.state)).1
     IO.println s!"-- {name}"
     show_ m
   IO.println "-- as a file"

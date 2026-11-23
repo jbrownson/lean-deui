@@ -96,6 +96,8 @@ unsafe def Runtime.eval (rt : Runtime) (commands : Array Syntax) (term : Syntax)
     let e ← elabTerm t none
     synthesizeSyntheticMVarsNoPostponing
     let e ← instantiateMVars e
+    if e.hasExprMVar then
+      throwErrorAt term "this doesn't have a definite type: its parts don't fit together"
     let type ← instantiateMVars (← inferType e)
     let typeText := toString (← ppExpr type)
     if (← whnf type).isForall then
