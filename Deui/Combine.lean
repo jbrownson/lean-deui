@@ -49,6 +49,47 @@ theorem carrying_ok {D : Type} (h : ca.Value → D) (g : Cached (prod ca cb) cc)
     ((h (ca.apply d.1 a.1), (g.f ((prod ca cb).apply d a)).1), (ca.apply d.1 a.1, (g.f ((prod ca cb).apply d a)).2))
   rw [← e]
 
+/-- `g`, with what it's of kept beside its result, edited as it's edited. -/
+def beside (g : Cached ca cb) : Cached ca (prod ca cb) where
+  Cache := g.Cache
+  f a := ((a, (g.f a).1), (g.f a).2)
+  df k d := ((d, (g.df k d).1), (g.df k d).2)
+
+theorem beside_ok (g : Cached ca cb) (hg : g.ok) : (beside g).ok := by
+  intro a d
+  have e := hg a d
+  show ((ca.apply d a, cb.apply (g.df (g.f a).2 d).1 (g.f a).1), (g.df (g.f a).2 d).2) =
+    ((ca.apply d a, (g.f (ca.apply d a)).1), (g.f (ca.apply d a)).2)
+  rw [← e]
+
+/-- A pair whose first is `g` of the pair, and whose second is as it was,
+edited as it's edited. -/
+def newFirst (g : Cached (prod ca cb) cc) : Cached (prod ca cb) (prod cc cb) where
+  Cache := g.Cache
+  f a := (((g.f a).1, a.2), (g.f a).2)
+  df k d := (((g.df k d).1, d.2), (g.df k d).2)
+
+theorem newFirst_ok (g : Cached (prod ca cb) cc) (hg : g.ok) : (newFirst g).ok := by
+  intro a d
+  have e := hg a d
+  show ((cc.apply (g.df (g.f a).2 d).1 (g.f a).1, cb.apply d.2 a.2), (g.df (g.f a).2 d).2) =
+    (((g.f ((prod ca cb).apply d a)).1, cb.apply d.2 a.2), (g.f ((prod ca cb).apply d a)).2)
+  rw [← e]
+
+/-- `g`, without the first of the pair it gives. -/
+def dropFirst (g : Cached ca (prod cb cc)) : Cached ca cc where
+  Cache := g.Cache
+  f a := ((g.f a).1.2, (g.f a).2)
+  df k d := ((g.df k d).1.2, (g.df k d).2)
+
+theorem dropFirst_ok (g : Cached ca (prod cb cc)) (hg : g.ok) : (dropFirst g).ok := by
+  intro a d
+  have e := hg a d
+  show (cc.apply (g.df (g.f a).2 d).1.2 (g.f a).1.2, (g.df (g.f a).2 d).2) =
+    ((g.f (ca.apply d a)).1.2, (g.f (ca.apply d a)).2)
+  rw [← e]
+  rfl
+
 /-- `g`'s derivative for a run of edits: each edit's run, joined, the cache
 passed from one to the next. -/
 def runsDf (g : Cached ca (runs cb)) : g.Cache → List ca.Edit → List cb.Edit × g.Cache
@@ -92,6 +133,12 @@ theorem onSecond_ok (g : Inc cb cc) (h : g.ok) : (onSecond (ca := ca) g).ok :=
   fun a d => h a.2 d.2
 
 end Inc
+
+/-- A function of a value that's set, as a value that's set. -/
+def latestMap {A B : Type} (h : A → B) : Cached (latest A) (latest B) :=
+  ⟨Unit, fun a => (h a, ()), fun _ a => (h a, ())⟩
+
+theorem latestMap_ok {A B : Type} (h : A → B) : (latestMap h).ok := fun _ _ => rfl
 
 /-! ## A function, kept -/
 
@@ -194,30 +241,33 @@ variable {K : Type} [DecidableEq K]
 /-- A view chosen by a key of the value, in a group of its own: while the
 key stays, the chosen view's derivative; when it changes, the view of the
 new key takes the old one's place whole. It's how a view follows something
-its derivative doesn't, like the window's size. -/
-def keyed (key : ca.Value → K) (g : K → Cached ca (runs sceneEdits)) : Cached ca (runs sceneEdits) where
+its derivative doesn't, like the window's size. And where `big` says an
+edit is one the derivative would spend more on than drawing again, the
+view is drawn again in the same way. -/
+def keyed (key : ca.Value → K) (g : K → Cached ca (runs sceneEdits))
+    (big : ca.Value → ca.Edit → Bool := fun _ _ => false) : Cached ca (runs sceneEdits) where
   Cache := ca.Value × ((k : K) × (g k).Cache)
   f a := (.group 0 0 [((g (key a)).f a).1], a, ⟨key a, ((g (key a)).f a).2⟩)
   df c d :=
     let a := ca.apply d c.1
-    if key a = c.2.1 then
+    if key a = c.2.1 ∧ big c.1 d = false then
       (((g c.2.1).df c.2.2 d).1.map (.update 0), a, ⟨c.2.1, ((g c.2.1).df c.2.2 d).2⟩)
     else
       ([.delete 0, .insert 0 ((g (key a)).f a).1], a, ⟨key a, ((g (key a)).f a).2⟩)
 
-theorem keyed_ok (key : ca.Value → K) (g : K → Cached ca (runs sceneEdits)) (hg : ∀ k, (g k).ok) :
-    (keyed key g).ok := by
+theorem keyed_ok (key : ca.Value → K) (g : K → Cached ca (runs sceneEdits))
+    (big : ca.Value → ca.Edit → Bool) (hg : ∀ k, (g k).ok) : (keyed key g big).ok := by
   intro a d
-  by_cases hk : key (ca.apply d a) = key a
+  by_cases hk : key (ca.apply d a) = key a ∧ big a d = false
   · have e := hg (key a) a d
     have e1 : run sceneEdits ((g (key a)).df ((g (key a)).f a).2 d).1 ((g (key a)).f a).1 =
         ((g (key a)).f (ca.apply d a)).1 := congrArg Prod.fst e
     have e2 : ((g (key a)).df ((g (key a)).f a).2 d).2 = ((g (key a)).f (ca.apply d a)).2 :=
       congrArg Prod.snd e
-    simp only [keyed, hk, ite_true]
+    simp only [keyed, hk, and_self, ite_true]
     show (run sceneEdits (((g (key a)).df ((g (key a)).f a).2 d).1.map (.update 0))
       (.group 0 0 [((g (key a)).f a).1]), _, _) = _
-    rw [run_update_head, e1, e2, hk]
+    rw [run_update_head, e1, e2, hk.1]
   · simp only [keyed, hk, ite_false]
     rfl
 

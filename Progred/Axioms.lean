@@ -11,3 +11,15 @@ or a new axiom. -/
 
 /-- info: 'Progred.Editor.laidOf_view' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Editor.laidOf_view
+
+/-- info: 'Progred.Display.reach_agree' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Display.reach_agree
+
+/-- info: 'Progred.Editor.item_untouched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Editor.item_untouched
+
+/-- info: 'Progred.Model.defined_other' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Model.defined_other
+
+/-- info: 'Progred.Display.inputOf_of_not_touched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Display.inputOf_of_not_touched

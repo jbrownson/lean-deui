@@ -74,3 +74,9 @@ new axiom. -/
 
 /-- info: 'Deui.Lists.sifted_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Lists.sifted_ok
+
+/-- info: 'Deui.Lists.flatBy_inc_ok' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Deui.Lists.flatBy_inc_ok
+
+/-- info: 'Deui.Lists.siftedWith_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Lists.siftedWith_ok

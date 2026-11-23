@@ -121,8 +121,8 @@ def Clipboard.inMemory : IO Clipboard := do
 on the clipboard, a paste asked for read from it, evaluations run if the
 document changed, the file written if a save was asked. -/
 unsafe def edits (rt : Run.Runtime) (memo : Memo) (functions : Functions) (file : Option System.FilePath)
-    (clipboard : Clipboard) (m : Model) : IO (List (Whole (plain Model))) := do
-  let mut m' := m
+    (clipboard : Clipboard) (m : Model) : IO (List Model.Edit) := do
+  let mut m' := m.taken
   let mut changed := false
   if m.ids.length < 32 then
     let more ← (List.range 64).mapM fun _ => CellId.new
@@ -153,6 +153,6 @@ unsafe def edits (rt : Run.Runtime) (memo : Memo) (functions : Functions) (file 
       m' := { m' with dirty := false }
     m' := { m' with saveAsked := false }
     changed := true
-  return if changed then [.replace m'] else []
+  return if changed then m'.emitted else []
 
 end Progred.Outside

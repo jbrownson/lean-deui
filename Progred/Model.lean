@@ -43,6 +43,10 @@ structure Model where
   /-- Whether the selection is to be scrolled into the window, once it's
   laid out. -/
   reveal : Bool := false
+  /-- The cells whose definitions have been written since the model was
+  last taken up, or that any may have been: what its edits say changed. -/
+  written : List CellId := []
+  rewritten : Bool := false
   /-- The window, in pixels, and how far the view is scrolled down. -/
   width : Nat := 900
   height : Nat := 700
@@ -88,15 +92,79 @@ def seen (m : Model) : Display.Seen :=
 def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩
 
 /-- The model with a new document: an undo step, unless it joins a run of
-typing. -/
-def write (m : Model) (doc : Document) (typing : Bool := false) : Model :=
+typing. `at_` is the path the document was written at, which says where the
+write landed, in a cell's definition or under the root, and `also` are
+other cells written; with no path, any cell may have been. -/
+def write (m : Model) (doc : Document) (typing : Bool := false) (at_ : Option Path := none)
+    (also : List CellId := []) : Model :=
+  let landed : Option (List CellId) :=
+    at_.bind fun path =>
+      (m.doc.location? path).map fun l =>
+        match l.start with
+        | .cell c => [c]
+        | .root => []
   { m with
     doc, redo := [], stale := true, dirty := true, typingRun := typing,
-    undo := if typing && m.typingRun then m.undo else m.snapshot :: m.undo }
+    undo := if typing && m.typingRun then m.undo else m.snapshot :: m.undo,
+    written := (landed.getD []) ++ also ++ m.written, rewritten := m.rewritten || landed.isNone }
 
 def restore (m : Model) (s : Snapshot) : Model :=
   { m with doc := s.doc, selection := s.selection.map ({ path := · }), folds := s.folds,
-           stale := true, dirty := true, typingRun := false }
+           stale := true, dirty := true, typingRun := false, rewritten := true }
+
+/-! ## Edits
+
+A model is edited by what changed: a cell's definition, written or taken
+away; all the definitions at once; or the rest, which is everything but the
+definitions. So an edit that writes one definition says which, and what
+depends on the others needn't look. -/
+
+inductive Edit where
+  | cell (c : CellId) (definition : Option Value)
+  | cells (all : Std.TreeMap CellId Value)
+  | rest (m : Model)
+
+/-- A table of definitions with one written, or taken away. -/
+def defined (cells : Std.TreeMap CellId Value) (c : CellId) : Option Value → Std.TreeMap CellId Value
+  | some v => cells.insert c v
+  | none => cells.erase c
+
+def Edit.apply : Edit → Model → Model
+  | .cell c v, m => { m with doc := { m.doc with cells := defined m.doc.cells c v } }
+  | .cells all, m => { m with doc := { m.doc with cells := all } }
+  | .rest new, m => { new with doc := { new.doc with cells := m.doc.cells } }
+
+/-- The model taken up to be changed: nothing written yet. -/
+def taken (m : Model) : Model := { m with written := [], rewritten := false }
+
+/-- The edits that a model changed from one taken up comes to: its written
+cells' definitions, or all of them, then the rest. -/
+def emitted (m : Model) : List Edit :=
+  (if m.rewritten then [Edit.cells m.doc.cells]
+    else m.written.eraseDups.map fun c => Edit.cell c m.doc.cells[c]?) ++ [.rest m.taken]
+
+/-- Writing one cell's definition leaves every other cell's as it was. -/
+theorem defined_other (cells : Std.TreeMap CellId Value) (c : CellId) (v : Option Value) (x : CellId)
+    (h : x ≠ c) : (defined cells c v)[x]? = cells[x]? := by
+  have ne : compare c x ≠ .eq := fun e => h (Std.LawfulEqCmp.eq_of_compare e).symm
+  cases v with
+  | some v => simp only [defined, Std.TreeMap.getElem?_insert, ne, ite_false]
+  | none => simp only [defined, Std.TreeMap.getElem?_erase, ne, ite_false]
+
+/-- A table of definitions' edits: one definition, or all. -/
+inductive CellsEdit where
+  | set (c : CellId) (definition : Option Value)
+  | all (cells : Std.TreeMap CellId Value)
+
+def CellsEdit.apply : CellsEdit → Std.TreeMap CellId Value → Std.TreeMap CellId Value
+  | .set c v, cells => defined cells c v
+  | .all new, _ => new
+
+/-- What a model's edit does to its definitions. -/
+def Edit.cells? : Edit → List CellsEdit
+  | .cell c v => [.set c v]
+  | .cells all => [.all all]
+  | .rest _ => []
 
 def undone (m : Model) : Model :=
   match m.undo with

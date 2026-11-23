@@ -87,111 +87,170 @@ def rowHeight (_ : Row) : Nat := Model.lineHeight
 
 def rowScene (r : Row) : Scene := .group 0 0 (lineParts r.val)
 
-/-- The editor's state is the model, replaced whole. -/
-abbrev edits : EditStructure := whole (plain Model)
+/-- The editor's state is the model, edited by what changed: a definition,
+all of them, or the rest. -/
+abbrev edits : EditStructure := ⟨Model, Model.Edit, Model.Edit.apply⟩
 
 /-- The model, and the document laid out: its parts, edited as a list. -/
 abbrev Laid : EditStructure := prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Block))))
 
-/-- Whether two models hold the same definitions: at once if they're the
-one object, as they are unless an edit wrote to a definition. -/
-def sameCells (a b : Model) : Bool :=
-  withPtrEq a.doc.cells b.doc.cells (fun _ => decide (a.doc.cells.toList = b.doc.cells.toList))
-    (by intro h; simp [h])
+/-- A table of definitions. -/
+abbrev Cells := Std.TreeMap CellId Value
 
-/-- The document's definitions in order, kept while they're the same. -/
-def cells : Cached (runs edits) (latest (Model × Display.Cells)) :=
-  memo (ca := runs edits) (fun m => Display.Cells.of m.doc) sameCells
+abbrev cellsEdits : EditStructure := ⟨Cells, Model.CellsEdit, Model.CellsEdit.apply⟩
 
-theorem cells_ok : cells.ok :=
+/-- The model, and its definitions with their own edits beside it: an edit
+to the model that writes a definition is an edit here that says which. -/
+abbrev Source : EditStructure := prod (latest Model) (runs cellsEdits)
+
+def source : Inc (runs edits) Source :=
+  ⟨fun m => (m, m.doc.cells), fun m es => (run edits es m, es.flatMap Model.Edit.cells?)⟩
+
+theorem source_ok : source.ok := by
+  intro m es
+  have h : ∀ (es : List Model.Edit) (m : Model),
+      run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells = (run edits es m).doc.cells := by
+    intro es
+    induction es with
+    | nil => intro m; rfl
+    | cons e t ih =>
+      intro m
+      show run cellsEdits (e.cells? ++ t.flatMap Model.Edit.cells?) m.doc.cells = _
+      rw [run_append]
+      have step : run cellsEdits e.cells? m.doc.cells = (Model.Edit.apply e m).doc.cells := by
+        cases e <;> rfl
+      rw [step]
+      exact ih _
+  show ((run edits es m, run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells) : Model × Cells) =
+    (run edits es m, (run edits es m).doc.cells)
+  rw [h]
+
+/-- The parts' entries, kept while the root is the same. -/
+def entriesKept : Cached Source (latest ((Model × Cells) × List Display.Entry)) :=
+  memo (ca := Source) (fun (a : Model × Cells) => Display.entries a.1.doc.root)
+    (fun (a b : Model × Cells) => equal a.1.doc.root b.1.doc.root)
+
+theorem entriesKept_ok : entriesKept.ok :=
   memo_ok _ _ fun a b h => by
-    have e : a.doc.cells.toList = b.doc.cells.toList := of_decide_eq_true h
-    show (⟨a.doc.cells.toList.toArray⟩ : Display.Cells) = ⟨b.doc.cells.toList.toArray⟩
+    have e : a.1.doc.root = b.1.doc.root := equal_sound _ _ h
+    show Display.entries a.1.doc.root = Display.entries b.1.doc.root
     rw [e]
 
-/-- The model, the definitions, and what each part is worked out from. -/
-abbrev Keys : EditStructure := latest ((Model × Display.Cells) × List Display.ItemKey)
+/-- The parts' entries, as edits to the list of them, with the model and
+its definitions kept beside: an entry whose value is as it was is no edit. -/
+def entries : Cached Source (prod Source (runs (Lists.editStructure (plain Display.Entry)))) :=
+  Cached.beside (Cached.dropFirst (compose entriesKept
+    (tracked (ca := latest ((Model × Cells) × List Display.Entry))
+      (fun (_ : (Model × Cells) × List Display.Entry) => ())
+      (fun (a : (Model × Cells) × List Display.Entry) => a.2) equal equal_refl)))
 
-/-- What each part is worked out from, kept while the root and the
-definitions are the same. -/
-def keysKept : Cached (latest (Model × Display.Cells)) Keys :=
-  memo (ca := latest (Model × Display.Cells)) (fun a => Display.itemKeys a.1.doc.root a.2)
-    (fun a b => decide (a.1.doc.root = b.1.doc.root ∧ a.2 = b.2))
+theorem entries_ok : entries.ok :=
+  Cached.beside_ok _ (Cached.dropFirst_ok _ (compose_ok _ _ entriesKept_ok (tracked_ok _ _ _ _ equal_sound)))
 
-theorem keysKept_ok : keysKept.ok :=
-  memo_ok _ _ fun a b h => by
-    have e : a.1.doc.root = b.1.doc.root ∧ a.2 = b.2 := of_decide_eq_true h
-    show Display.itemKeys a.1.doc.root a.2 = Display.itemKeys b.1.doc.root b.2
-    rw [e.1, e.2]
+/-- A table of definitions, as what gives a cell's. -/
+def look (cells : Cells) (c : CellId) : Option Value := cells[c]?
 
-/-- And as edits to the list of them: an entry whose value and the
-definitions are as they were is no edit. -/
-def keys : Cached Keys (prod (latest (Model × Display.Cells)) (runs (Lists.editStructure (plain Display.ItemKey)))) :=
-  tracked (ca := Keys) (fun (a : (Model × Display.Cells) × List Display.ItemKey) => a.1)
-    (fun (a : (Model × Display.Cells) × List Display.ItemKey) => a.2) equal equal_refl
+/-- Whether an edit to the definitions touches a part: whether it writes a
+cell the part asked for. -/
+def writes (item : Display.Item) : Model.CellsEdit → Bool
+  | .set c _ => item.reads.contains c
+  | .all _ => true
 
-theorem keys_ok : keys.ok := tracked_ok _ _ _ _ equal_sound
+/-- A part that no edit of a run touches is the part it was: each edit
+writes a cell the part never asked for. -/
+theorem item_untouched (e : Display.Entry) (ces : List Model.CellsEdit) (cells : Cells)
+    (h : ces.any (writes (Display.item (look cells) e)) = false) :
+    Display.item (look (run cellsEdits ces cells)) e = Display.item (look cells) e := by
+  induction ces generalizing cells with
+  | nil => rfl
+  | cons ce t ih =>
+    simp only [List.any_cons, Bool.or_eq_false_iff] at h
+    cases ce with
+    | all new => simp [writes] at h
+    | set c v =>
+      have hc : c ∉ (Display.item (look cells) e).reads := by
+        have := h.1
+        simpa [writes] using this
+      have step : Display.item (look (Model.defined cells c v)) e = Display.item (look cells) e :=
+        Display.item_agree (look cells) (look (Model.defined cells c v)) e fun x hx =>
+          Model.defined_other cells c v x fun eq => hc (eq ▸ hx)
+      have rest := ih (Model.defined cells c v) (by rw [step]; exact h.2)
+      show Display.item (look (run cellsEdits t (Model.defined cells c v))) e = _
+      rw [rest, step]
 
-/-- A part with what it reaches, of what it's worked out from. -/
-def itemInc : Inc (plain Display.ItemKey) (plain Display.Item) := ⟨Display.item, fun _ e => nomatch e⟩
-
-theorem itemInc_ok : itemInc.ok := fun _ e => nomatch e
-
-/-- The model, the definitions, and the parts with what they reach. -/
+/-- The model, its definitions, and the parts with what they reach. -/
 abbrev Items : EditStructure :=
-  prod (latest (Model × Display.Cells)) (runs (Lists.editStructure (plain Display.Item)))
+  prod (latest (Model × Cells)) (runs (Lists.editStructure (whole (plain Display.Item))))
 
-/-- The model, the parts' items, and the parts. -/
-abbrev Frames : EditStructure :=
-  latest (((Model × Display.Cells) × List Display.Item) × List Display.Frame)
+/-- Each part with what it reaches. An edit to the definitions is asked of
+each part, and only one that asked for a cell it writes is worked out
+again: writing a definition leaves alone every part that doesn't reach it. -/
+def items : Cached (prod Source (runs (Lists.editStructure (plain Display.Entry)))) Items :=
+  Cached.carrying (fun (a : Model × Cells) => a)
+    (Lists.sifted (cc := Source) (fun (a : Model × Cells) entry => Display.item (look a.2) entry)
+      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) _ item => d.2.any (writes item))
+      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) => d.2.isEmpty))
 
-/-- The parts, kept while the items are the same and no entry is being
-added, or the same one is. -/
-def framesKept : Cached Items Frames :=
-  memo (ca := Items)
-    (fun (a : (Model × Display.Cells) × List Display.Item) =>
-      Display.frames a.2 (Display.pendingEntry a.1.1.selection))
-    (fun (a b : (Model × Display.Cells) × List Display.Item) =>
-      Lists.alike (A := Display.Item) equal equal_refl a.2 b.2 &&
-        decide (Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection))
-
-theorem framesKept_ok : framesKept.ok :=
-  memo_ok _ _ fun a b h => by
-    simp only [Bool.and_eq_true] at h
-    have e1 : a.2 = b.2 := Lists.alike_sound (A := Display.Item) equal equal_refl equal_sound _ _ h.1
-    have e2 : Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection := of_decide_eq_true h.2
-    show Display.frames a.2 (Display.pendingEntry a.1.1.selection) =
-      Display.frames b.2 (Display.pendingEntry b.1.1.selection)
-    rw [e1, e2]
-
-/-- The model with what the parts are drawn with, and the parts, edited as
-a list. -/
-abbrev Parts : EditStructure :=
-  prod (latest (Model × Display.Seen)) (runs (Lists.editStructure (plain Display.Frame)))
-
-/-- The parts as edits to the list of them, with what of the model they're
-drawn with worked out once. -/
-def frames : Cached Frames Parts :=
-  tracked (ca := Frames)
-    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Frame) => (a.1.1.1, a.1.1.1.seen))
-    (fun (a : ((Model × Display.Cells) × List Display.Item) × List Display.Frame) => a.2) equal equal_refl
-
-theorem frames_ok : frames.ok := tracked_ok _ _ _ _ equal_sound
-
-/-- Each part's input. A change of the model is asked of each part, and
-only a part it touches is given a new input: a selection that moves makes
-edits at the parts it leaves and enters. -/
-def inputs : Cached Parts (prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Input))))) :=
-  Cached.carrying (fun (a : Model × Display.Seen) => a.1)
-    (Lists.sifted (cc := latest (Model × Display.Seen)) (fun (a : Model × Display.Seen) frame => Display.input a.2 frame)
-      (fun (a b : Model × Display.Seen) frame _ => Display.touched a.2 b.2 frame)
-      (fun (a b : Model × Display.Seen) => Display.still a.2 b.2))
-
-theorem inputs_ok : inputs.ok :=
+theorem items_ok : items.ok :=
   Cached.carrying_ok _ _
     (Lists.sifted_ok _ _ _
-      (fun (c d : Model × Display.Seen) frame h => Display.input_of_not_touched c.2 d.2 frame h)
-      (fun (c d : Model × Display.Seen) h frame => Display.not_touched_of_still c.2 d.2 h frame))
+      (fun (c : Model × Cells) (d : Model × List Model.CellsEdit) entry h => item_untouched entry d.2 c.2 h)
+      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) h _ => by
+        have : d.2 = [] := List.isEmpty_iff.mp h
+        simp [this]))
+
+/-- Whether two lists of items have their entries at the same positions. -/
+def samePlaces (xs ys : List Display.Item) : Bool :=
+  Lists.alike (fun x y => decide (x.place = y.place)) (fun _ => decide_eq_true rfl) xs ys
+
+/-- The entries' slots, kept while the entries are at the same positions
+and no entry is being added, or the same one is: typing in an entry leaves
+them be. -/
+def slotsKept : Cached Items (latest (((Model × Cells) × List Display.Item) × Display.Slots)) :=
+  memo (ca := Items)
+    (fun (a : (Model × Cells) × List Display.Item) =>
+      (⟨Display.slotsOf (a.2.map Display.Item.place) (Display.pendingEntry a.1.1.selection)⟩ : Display.Slots))
+    (fun (a b : (Model × Cells) × List Display.Item) =>
+      samePlaces a.2 b.2 &&
+        decide (Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection))
+
+theorem slotsKept_ok : slotsKept.ok :=
+  memo_ok _ _ fun a b h => by
+    simp only [Bool.and_eq_true] at h
+    have e1 : a.2.map Display.Item.place = b.2.map Display.Item.place := Lists.all2_map _ _ _ h.1
+    have e2 : Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection := of_decide_eq_true h.2
+    show (⟨Display.slotsOf (a.2.map Display.Item.place) (Display.pendingEntry a.1.1.selection)⟩ : Display.Slots) =
+      ⟨Display.slotsOf (b.2.map Display.Item.place) (Display.pendingEntry b.1.1.selection)⟩
+    rw [e1, e2]
+
+/-- The model, with what's around every part: what the model shows, worked
+out once, and the slots. -/
+def around : Cached Items (latest (Model × Display.Around)) :=
+  compose slotsKept
+    (latestMap fun (a : ((Model × Cells) × List Display.Item) × Display.Slots) =>
+      (a.1.1.1, (⟨a.1.1.1.seen, a.2⟩ : Display.Around)))
+
+theorem around_ok : around.ok := compose_ok _ _ slotsKept_ok (latestMap_ok _)
+
+/-- Each part's input. A change of what's around is asked of each part, and
+only a part it touches is given a new input: a selection that moves makes
+edits at the parts it leaves and enters, and a part whose item changed is
+an edit at that part. -/
+def inputs : Cached Items (prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Input))))) :=
+  compose (Cached.newFirst around)
+    (Cached.carrying (fun (a : Model × Display.Around) => a.1)
+      (Lists.siftedWhole (cc := latest (Model × Display.Around))
+        (fun (a : Model × Display.Around) item => Display.inputOf a.2 item)
+        (fun (a b : Model × Display.Around) item was => Display.touchedAround a.2 b.2 item was)
+        (fun (a b : Model × Display.Around) => Display.stillAround a.2 b.2)))
+
+theorem inputs_ok : inputs.ok :=
+  compose_ok _ _ (Cached.newFirst_ok _ around_ok)
+    (Cached.carrying_ok _ _
+      (Lists.siftedWhole_ok _ _ _
+        (fun (c d : Model × Display.Around) item h => Display.inputOf_of_not_touched c.2 d.2 item h)
+        (fun (c d : Model × Display.Around) h item =>
+          Display.not_touchedAround_of_still c.2 d.2 h item (Display.inputOf c.2 item))))
 
 /-- A part's layout, of its input. -/
 def partInc : Inc (plain Display.Input) (plain Display.Block) := ⟨Display.part, fun _ e => nomatch e⟩
@@ -201,25 +260,12 @@ theorem partInc_ok : partInc.ok := fun _ e => nomatch e
 /-- The document laid out, as an incremental function of the model: a part
 is laid out again only where its input changed. -/
 def layout : Cached (runs edits) Laid :=
-  compose
-    (compose
-      (compose
-        (compose (compose (compose (compose cells keysKept) keys) (Cached.second (cached (Lists.map.inc itemInc))))
-          framesKept)
-        frames)
-      inputs)
+  compose (compose (compose (compose (cached source) entries) items) inputs)
     (Cached.second (cached (Lists.map.inc (whole.lift partInc))))
 
 theorem layout_ok : layout.ok :=
   compose_ok _ _
-    (compose_ok _ _
-      (compose_ok _ _
-        (compose_ok _ _
-          (compose_ok _ _ (compose_ok _ _ (compose_ok _ _ cells_ok keysKept_ok) keys_ok)
-            (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ itemInc_ok))))
-          framesKept_ok)
-        frames_ok)
-      inputs_ok)
+    (compose_ok _ _ (compose_ok _ _ (compose_ok _ _ (cached_ok _ source_ok) entries_ok) items_ok) inputs_ok)
     (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ (whole_lift_ok _ partInc_ok))))
 
 /-- How far the lines' top is above the window's top. -/
@@ -228,15 +274,13 @@ def offset (m : Model) : Int := (m.scroll : Int) - Model.margin
 /-- The model, and the lines of the document's parts, joined. -/
 abbrev Lines : EditStructure := prod (latest Model) (runs (Lists.editStructure (plain Row)))
 
-/-- The parts' lines, joined: where a part was laid out again, only the
-lines that differ from what they were are edits. -/
+/-- The parts' lines, joined: a part laid out again makes edits only at the
+lines of its own that differ from what they were. -/
 def lines : Cached Laid Lines :=
-  Cached.second
-    (Lists.flatChange (cb := whole (plain Display.Block)) rowsOf Display.Block.same Display.Block.same_refl
-      fun a b => decide (a = b))
+  Cached.second (cached (Lists.flatBy.inc (cb := whole (plain Display.Block)) rowsOf fun a b => decide (a = b)))
 
 theorem lines_ok : lines.ok :=
-  Cached.second_ok _ (Lists.flatChange_ok _ _ _ _ Display.Block.same_sound fun _ _ h => of_decide_eq_true h)
+  Cached.second_ok _ (cached_ok _ (Lists.flatBy_inc_ok _ _ fun _ _ h => of_decide_eq_true h))
 
 /-- The lines, at the scroll offset. -/
 def placedRows : Inc Lines (runs (Lists.Scrolled.At.edits (plain Row))) :=
@@ -253,12 +297,18 @@ theorem window_ok (height : Nat) : (window height).ok :=
     (compose_ok _ _ (Lists.Scrolled.anchored_ok _ _)
       (compose_ok _ _ (cached_ok _ (Lists.Scrolled.view_inc_ok _ _ _)) (cached_ok _ (Drawing.inc_ok rowScene))))
 
-/-- The window's lines, whatever its height: a new height shows them anew. -/
+/-- How many parts an edit lays out again before the window's lines are
+worked out afresh, not edit by edit: an edit that large costs more that way. -/
+def manyParts : Nat := 48
+
+/-- The window's lines, whatever its height: a new height shows them anew,
+and so does an edit that lays out many parts at once. -/
 def rowsLayer : Cached Laid (runs sceneEdits) :=
-  compose lines (keyed (fun (a : Model × List Row) => a.1.height) window)
+  keyed (fun (a : Model × List Display.Block) => a.1.height) (fun height => compose lines (window height))
+    (fun _ (d : Model × List (Lists.Edit.of (whole (plain Display.Block)))) => decide (d.2.length > manyParts))
 
 theorem rowsLayer_ok : rowsLayer.ok :=
-  compose_ok _ _ lines_ok (keyed_ok _ _ window_ok)
+  keyed_ok _ _ _ fun height => compose_ok _ _ lines_ok (window_ok height)
 
 /-- Where the caret is: its line and column. -/
 def caretAt (l : Model.Layout) : Option (Nat × Nat) :=
@@ -313,21 +363,23 @@ def laidOf (c : view.Cache) : Model × List Display.Block :=
   let kept : layout.Cache × (rowsLayer.Cache × ((Model × List Display.Block) × Nat)) := c
   kept.2.2.1
 
-/-- The layout of another model, from what the view keeps for this one:
-only the parts whose inputs differ are laid out. -/
+/-- The layout of the model an edit is passing through, from what the view
+keeps for the one it began from: the edits the model has come to so far
+are run through the layout's derivative, and only the parts they touch are
+laid out. -/
 def relaid (c : view.Cache) (m : Model) : Model.Layout :=
   let kept : layout.Cache × (rowsLayer.Cache × ((Model × List Display.Block) × Nat)) := c
   let made : (Model × List (Lists.Edit.of (whole (plain Display.Block)))) × layout.Cache :=
-    layout.df kept.1 [.replace m]
+    layout.df kept.1 m.emitted
   ⟨Lists.patch (whole (plain Display.Block)) made.1.2 kept.2.2.1.2⟩
 
 /-- What the view keeps for a model is the model and its layout. -/
 theorem laidOf_view (m : Model) : laidOf (view.f m).2 = (m, Display.blocks m.doc m.seen) := rfl
 
-/-- And the layout it gives of another model is that model's layout, as if
-worked out from nothing. -/
-theorem relaid_view (m m' : Model) : relaid (view.f m).2 m' = Model.Layout.of m' := by
-  have h := congrArg (fun r => r.1.2) (layout_ok m [.replace m'])
+/-- And the layout it gives of a model passing through is the layout of the
+model those edits make, as if worked out from nothing. -/
+theorem relaid_view (m m' : Model) : relaid (view.f m).2 m' = Model.Layout.of (run edits m'.emitted m) := by
+  have h := congrArg (fun r => r.1.2) (layout_ok m m'.emitted)
   exact congrArg (fun bs : List Display.Block => (⟨bs⟩ : Model.Layout)) h
 
 /-! ## Events -/
@@ -368,8 +420,8 @@ def event (here : Model.Layout) (laid : Model → Model.Layout) (m : Model) (sce
 
 def app : App.App edits where
   view := view
-  respond m scene kept e := [.replace (event ⟨(laidOf kept).2⟩ (relaid kept) m scene e)]
+  respond m scene kept e := (event ⟨(laidOf kept).2⟩ (relaid kept) m.taken scene e).emitted
   settle m kept :=
-    if m.reveal then [.replace (Model.revealed ⟨(laidOf kept).2⟩ { m with reveal := false })] else []
+    if m.reveal then [.rest (Model.revealed ⟨(laidOf kept).2⟩ { m with reveal := false })] else []
 
 end Progred.Editor

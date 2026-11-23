@@ -15,7 +15,38 @@ only from the system's random numbers (`CellId.new`), never from a name. -/
 structure CellId where
   hi : UInt64
   lo : UInt64
-  deriving BEq, Hashable, DecidableEq, Ord, Inhabited
+  deriving Hashable, DecidableEq, Inhabited
+
+/-- Cells in order: by the first half of the id, then the second. -/
+instance : Ord CellId := ⟨fun a b => (compare a.hi b.hi).then (compare a.lo b.lo)⟩
+
+/-- The order is a proper one, which is what lets a table of cells say that
+writing one cell's definition leaves every other's as it was. -/
+instance : Std.TransCmp (compare : CellId → CellId → Ordering) where
+  eq_swap {a b} := by
+    show (compare a.hi b.hi).then (compare a.lo b.lo) = ((compare b.hi a.hi).then (compare b.lo a.lo)).swap
+    rw [Ordering.swap_then, ← Std.OrientedCmp.eq_swap, ← Std.OrientedCmp.eq_swap]
+  isLE_trans {a b c} h1 h2 := by
+    have h1 : ((compare a.hi b.hi).then (compare a.lo b.lo)).isLE := h1
+    have h2 : ((compare b.hi c.hi).then (compare b.lo c.lo)).isLE := h2
+    show ((compare a.hi c.hi).then (compare a.lo c.lo)).isLE
+    rw [Ordering.isLE_then_iff_or] at h1 h2 ⊢
+    rcases h1 with h1 | ⟨h1, l1⟩ <;> rcases h2 with h2 | ⟨h2, l2⟩
+    · exact .inl (Std.TransCmp.lt_trans h1 h2)
+    · exact .inl (Std.TransCmp.lt_of_lt_of_eq h1 h2)
+    · exact .inl (Std.TransCmp.lt_of_eq_of_lt h1 h2)
+    · exact .inr ⟨Std.TransCmp.eq_trans h1 h2, Std.TransCmp.isLE_trans l1 l2⟩
+
+instance : Std.LawfulEqCmp (compare : CellId → CellId → Ordering) where
+  compare_self {a} := by
+    show (compare a.hi a.hi).then (compare a.lo a.lo) = .eq
+    simp [Std.ReflCmp.compare_self]
+  eq_of_compare {a b} h := by
+    have h : (compare a.hi b.hi).then (compare a.lo b.lo) = .eq := h
+    rw [Ordering.then_eq_eq] at h
+    cases a; cases b
+    simp only [CellId.mk.injEq]
+    exact ⟨Std.LawfulEqCmp.eq_of_compare h.1, Std.LawfulEqCmp.eq_of_compare h.2⟩
 
 namespace CellId
 
@@ -263,7 +294,6 @@ def without (v : Value) : List Step → Option Value
 
 end Value
 
-instance : Ord CellId := inferInstance
 
 structure Document where
   root : Option Value := none

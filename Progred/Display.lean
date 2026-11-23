@@ -636,19 +636,30 @@ def covers (sel : Selection) (o : Occ) : Bool :=
 inductive Shape where
   /-- The whole document: its root, or the hole of an empty one. -/
   | whole (root : Option Value)
-  /-- A notebook's entry at a path, numbered: its value, or the hole of one
-  being added; and the places to add an entry before it, and after it if
-  it's the last. -/
-  | entry (number : Nat) (path : Path) (value : Option Value) (before after : Option Path)
+  /-- A notebook's entry at a path, numbered; the places to add an entry
+  before it, and after it if it's the last; and the hole of an entry being
+  added before it, if it's the first, or after it. -/
+  | entry (number : Nat) (path : Path) (value : Value) (before after holeBefore holeAfter : Option Path)
   /-- A notebook with no entries: the place to add the first. -/
   | empty (point : Path)
   deriving DecidableEq
 
-/-- All a part's layout depends on. -/
-structure Input where
+/-- A part before the editor's state reaches it: what it's of, and what it
+reaches. -/
+structure Frame where
   shape : Shape
   /-- The definitions it reaches, in the document. -/
   cells : Shared (List (CellId × Value))
+  /-- The evaluations' expressions in it. -/
+  expressions : List Value
+  /-- Whether any kind in it is drawn by a function. -/
+  functions : Bool
+  deriving DecidableEq
+
+/-- All a part's layout depends on: the part, and what of the editor's
+state it's drawn with. -/
+structure Input where
+  frame : Frame
   selection : Option Selection
   folds : List (Path × Bool)
   results : List (Value × Outcome)
@@ -660,16 +671,24 @@ structure Input where
 
 def partDoc : Shape → M Doc
   | .whole root => value s [] root
-  | .entry number path v before after => do
+  | .entry number path v before after holeBefore holeAfter => do
     let point (p : Option Path) : M Doc :=
       match p with
       | some p => occ p .insertion (.point .ink)
       | none => pure (.row [])
+    -- An entry being added is a line of its own, with no number yet.
+    let adding (p : Option Path) : M (List Doc) :=
+      match p with
+      | some p => do return [.row [dim "·  ", .hang 3 (← value s p none)], t ""]
+      | none => pure []
+    let hb ← adding holeBefore
     let b ← point before
-    let item ← value s path v
+    let item ← value s path (some v)
     let a ← point after
-    return .col [.row [dim (toString number ++ (if number < 10 then "  " else " ")), .hang 3 (.row [b, item, a])], t ""]
-  | .empty point => occ point .insertion (.point .ink)
+    let ha ← adding holeAfter
+    return .col (hb ++
+      [.row [dim (toString number ++ (if number < 10 then "  " else " ")), .hang 3 (.row [b, item, a])], t ""] ++ ha)
+  | .empty point => if pendingAt s point then value s point none else occ point .insertion (.point .ink)
 
 end Display
 
@@ -677,9 +696,9 @@ open Display in
 /-- A part, laid out. -/
 def Display.part (i : Input) : Block :=
   let s : Shown :=
-    { doc := { root := none, cells := Std.TreeMap.ofList i.cells.val }, library := Builtin.library,
+    { doc := { root := none, cells := Std.TreeMap.ofList i.frame.cells.val }, library := Builtin.library,
       selection := i.selection, folds := i.folds, results := i.results, layouts := i.layouts.val }
-  let (doc, drawn) := (partDoc s i.shape).run {}
+  let (doc, drawn) := (partDoc s i.frame.shape).run {}
   let lines := Doc.lines i.ribbon 0 0 0 doc
   let occs := drawn.occs
   let piece (s : Span) : Piece :=
@@ -720,52 +739,105 @@ partial def mentionsInto (found : Array CellId) : Value → Array CellId
   | .list items => items.foldl (fun found (_, v) => mentionsInto found v) found
   | .record fields => fields.foldl (fun found (l, v) => mentionsInto (found.push l) v) found
 
-/-- The document's definitions, in order: one object while the document's
-definitions are, so that what's worked out from them is compared at once. -/
-abbrev Cells := Shared (Array (CellId × Value))
+/-- The definitions cells reach, each once, and every cell asked for on the
+way, defined or not: what's asked is all the answer depends on. `look`
+gives a cell's definition; `todo` are the cells still to ask for, `seen`
+those asked, `found` the definitions. It stops when `fuel` runs out, which
+a document's cells don't reach. -/
+def reach (look : CellId → Option Value) :
+    Nat → List CellId → List CellId → List (CellId × Value) → List CellId × List (CellId × Value)
+  | 0, _, seen, found => (seen, found)
+  | _ + 1, [], seen, found => (seen, found)
+  | fuel + 1, c :: rest, seen, found =>
+    if seen.contains c then reach look fuel rest seen found
+    else match look c with
+      | some v => reach look fuel ((mentionsInto #[] v).toList ++ rest) (c :: seen) ((c, v) :: found)
+      | none => reach look fuel rest (c :: seen) found
 
-def Cells.of (d : Document) : Cells := ⟨d.cells.toList.toArray⟩
+/-- What was asked stays asked. -/
+theorem reach_seen (look : CellId → Option Value) (fuel : Nat) (todo seen : List CellId)
+    (found : List (CellId × Value)) (x : CellId) (h : x ∈ seen) : x ∈ (reach look fuel todo seen found).1 := by
+  induction fuel generalizing todo seen found with
+  | zero => exact h
+  | succ fuel ih =>
+    cases todo with
+    | nil => exact h
+    | cons c rest =>
+      simp only [reach]
+      split
+      · exact ih _ _ _ h
+      · split
+        · exact ih _ _ _ (List.mem_cons_of_mem _ h)
+        · exact ih _ _ _ (List.mem_cons_of_mem _ h)
 
-/-- A definition, among definitions in order. -/
-def definitionIn (cells : Array (CellId × Value)) (c : CellId) : Option Value :=
-  (cells.binSearch (c, default) fun a b => compare a.1 b.1 == .lt).map (·.2)
+/-- Two tables of definitions that agree on every cell asked for give the
+same: the cells asked for are all that's read. -/
+theorem reach_agree (look look' : CellId → Option Value) (fuel : Nat) (todo seen : List CellId)
+    (found : List (CellId × Value))
+    (h : ∀ x ∈ (reach look fuel todo seen found).1, x ∉ seen → look' x = look x) :
+    reach look' fuel todo seen found = reach look fuel todo seen found := by
+  induction fuel generalizing todo seen found with
+  | zero => rfl
+  | succ fuel ih =>
+    cases todo with
+    | nil => rfl
+    | cons c rest =>
+      simp only [reach] at h ⊢
+      by_cases hc : seen.contains c = true
+      · simp only [hc, ite_true] at h ⊢
+        exact ih _ _ _ h
+      · simp only [hc] at h ⊢
+        have hnot : c ∉ seen := fun hm => hc (by simpa using hm)
+        -- The cell asked for here is among those asked, and wasn't before.
+        have agree : look' c = look c := by
+          cases hl : look c with
+          | some v =>
+            rw [hl] at h
+            have := h c (reach_seen look fuel _ _ _ c (List.mem_cons_self ..)) hnot
+            rw [this, hl]
+          | none =>
+            rw [hl] at h
+            have := h c (reach_seen look fuel _ _ _ c (List.mem_cons_self ..)) hnot
+            rw [this, hl]
+        rw [agree]
+        cases hl : look c with
+        | some v =>
+          rw [hl] at h
+          exact ih _ _ _ fun x hx hn => h x hx fun hs => hn (List.mem_cons_of_mem _ hs)
+        | none =>
+          rw [hl] at h
+          exact ih _ _ _ fun x hx hn => h x hx fun hs => hn (List.mem_cons_of_mem _ hs)
 
-/-- The definitions cells reach, each once, in the order they're reached. -/
-partial def reachIn (cells : Array (CellId × Value)) (todo : List CellId)
-    (seen : Std.TreeSet CellId := {}) (found : Array (CellId × Value) := #[]) : List (CellId × Value) :=
-  match todo with
-  | [] => found.toList
-  | c :: rest =>
-    if seen.contains c then reachIn cells rest seen found
-    else match definitionIn cells c with
-      | some v => reachIn cells ((mentionsInto #[] v).toList ++ rest) (seen.insert c) (found.push (c, v))
-      | none => reachIn cells rest (seen.insert c) found
+/-- What a part of the document is of: an entry of the root notebook, the
+whole root, or a root notebook with no entries. -/
+inductive Entry where
+  | entry (position : Position) (value : Value)
+  | whole (root : Option Value)
+  | empty
+  deriving DecidableEq, Inhabited
 
-/-- What a part of the document is worked out from: an entry of the root
-notebook, or the whole root, with the document's definitions. -/
-inductive ItemKey where
-  | entry (position : Position) (value : Value) (cells : Cells)
-  | whole (root : Option Value) (cells : Cells)
-  deriving DecidableEq
-
-/-- The document, split: the root notebook's entries, or the whole root. -/
-def itemKeys (root : Option Value) (cells : Cells) : List ItemKey :=
+/-- The document's root, split: the root notebook's entries, or the whole
+root. -/
+def entries (root : Option Value) : List Entry :=
   match root with
   | some v =>
     if v.kind? == some Kinds.notebook then
       match v.field? Kinds.entries with
-      | some (.list items) => items.map fun (p, w) => .entry p w cells
-      | _ => [.whole root cells]
-    else [.whole root cells]
-  | none => [.whole root cells]
+      | some (.list []) => [.empty]
+      | some (.list items) => items.map fun (p, w) => .entry p w
+      | _ => [.whole root]
+    else [.whole root]
+  | none => [.whole root]
 
-/-- A part of the document, with what it reaches: the definitions, and the
-evaluations' expressions in it. -/
-inductive Item where
-  | entry (position : Position) (value : Value) (reached : Shared (List (CellId × Value)))
-      (expressions : List Value) (functions : Bool)
-  | whole (root : Option Value) (reached : Shared (List (CellId × Value))) (expressions : List Value)
-      (functions : Bool)
+/-- A part of the document, with what it reaches: the definitions, the
+evaluations' expressions in it, whether any kind in it is drawn by a
+function, and every cell that was asked for to find these out. -/
+structure Item where
+  entry : Entry
+  reached : Shared (List (CellId × Value))
+  expressions : List Value
+  functions : Bool
+  reads : List CellId
   deriving DecidableEq, Inhabited
 
 /-- Whether any of the definitions is a def whose projection is a function:
@@ -778,16 +850,37 @@ def anyFunctions (reached : List (CellId × Value)) : Bool :=
       | some p => (Node.read p).isNone
       | none => false
 
-def item : ItemKey → Item
-  | .entry position value cells =>
-    let reached := reachIn cells.val (mentionsInto #[] value).toList
-    .entry position value ⟨reached⟩ (expressionsIn value) (anyFunctions reached)
-  | .whole root cells =>
-    match root with
-    | some v =>
-      let reached := reachIn cells.val (mentionsInto #[] v).toList
-      .whole root ⟨reached⟩ (expressionsIn v) (anyFunctions reached)
-    | none => .whole root ⟨[]⟩ [] false
+/-- How far reaching goes before it stops: further than a document's cells. -/
+def reachFuel : Nat := 1000000
+
+/-- The value a part is of, if it has one. -/
+def Entry.value? : Entry → Option Value
+  | .entry _ v => some v
+  | .whole root => root
+  | .empty => Option.none
+
+/-- A part with what a value in it reaches, by a table of definitions. -/
+def itemOf (look : CellId → Option Value) (e : Entry) (v : Value) : Item :=
+  ⟨e, ⟨(reach look reachFuel (mentionsInto #[] v).toList [] []).2⟩, expressionsIn v,
+    anyFunctions (reach look reachFuel (mentionsInto #[] v).toList [] []).2,
+    (reach look reachFuel (mentionsInto #[] v).toList [] []).1⟩
+
+/-- A part with what it reaches, by a table of definitions. -/
+def item (look : CellId → Option Value) (e : Entry) : Item :=
+  match e.value? with
+  | some v => itemOf look e v
+  | none => ⟨e, ⟨[]⟩, [], false, []⟩
+
+/-- A part is the same by two tables that agree on the cells it asked for. -/
+theorem item_agree (look look' : CellId → Option Value) (e : Entry)
+    (h : ∀ x ∈ (item look e).reads, look' x = look x) : item look' e = item look e := by
+  unfold item at h ⊢
+  cases hv : e.value? with
+  | none => rfl
+  | some v =>
+    rw [hv] at h
+    have hr := reach_agree look look' reachFuel (mentionsInto #[] v).toList [] [] fun x hx _ => h x hx
+    simp only [itemOf, hr]
 
 /-- What of the editor's state the parts are drawn with. -/
 structure Seen where
@@ -816,58 +909,74 @@ def pendingEntry (selection : Option Selection) : Option Position :=
     else none
   | none => none
 
-/-- A part before the editor's state reaches it: what it's of, and what it
-reaches. The parts are a function of the document and of where an entry is
-being added, and of nothing else the editor's state holds. -/
-structure Frame where
-  shape : Shape
-  cells : Shared (List (CellId × Value))
-  expressions : List Value
-  functions : Bool
-  deriving DecidableEq
+/-- The path of an entry at a position. -/
+def entryAt (p : Position) : Path := entriesPath ++ [.element p]
 
-/-- The parts: one for each entry, in order, with the hole of an entry
-being added among them, and no place to add an entry beside the hole; or
-one for the whole root. -/
-def frames (items : List Item) (pending : Option Position) : List Frame :=
-  match items with
-  | [.whole root cells expressions functions] => [⟨.whole root, cells, expressions, functions⟩]
-  | _ =>
-    -- The root notebook's entries: an item that isn't one is no entry.
-    let items : List (Position × Value × Shared (List (CellId × Value)) × List Value × Bool) :=
-      items.filterMap fun
-        | .entry p v reached expressions functions => some (p, v, reached, expressions, functions)
-        | .whole .. => none
-    let pending := pending.filter fun p => !items.any (·.1 == p)
-    let all : List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) :=
-      match pending with
-      | some p =>
-        (items.filter fun i => Position.lt i.1 p).map (fun i => (i.1, some i.2)) ++ [(p, none)] ++
-          (items.filter fun i => !Position.lt i.1 p).map fun i => (i.1, some i.2)
-      | none => items.map fun i => (i.1, some i.2)
-    let at_ (p : Position) : Path := entriesPath ++ [.element p]
-    let rec go (number : Nat) (prev : Option (Position × Bool)) :
-        List (Position × Option (Value × Shared (List (CellId × Value)) × List Value × Bool)) → List Frame
-      | [] => []
-      | (p, item) :: rest =>
-        let beside := item.isNone || (prev.map (·.2)).getD false
-        let before := if beside then none else some (at_ (Position.between (prev.map (·.1)) (some p)))
-        let after := if rest.isEmpty && item.isSome then some (at_ (Position.between (some p) none)) else none
-        { shape := .entry number (at_ p) (item.map (·.1)) before after,
-          cells := (item.map (·.2.1)).getD ⟨[]⟩,
-          expressions := (item.map (·.2.2.1)).getD [],
-          functions := (item.map (·.2.2.2)).getD false } :: go (number + 1) (some (p, item.isNone)) rest
-    if all.isEmpty then [⟨.empty (at_ (Position.between none none)), ⟨[]⟩, [], false⟩]
-    else go 1 none all
+/-- What an entry's place among the entries gives its part: its number,
+the places to add an entry beside it, and the hole of an entry being added
+beside it. It's all a part takes from the other entries. -/
+structure Slot where
+  number : Nat := 0
+  before : Option Path := none
+  after : Option Path := none
+  holeBefore : Option Path := none
+  holeAfter : Option Path := none
+  deriving DecidableEq, Inhabited
+
+/-- Where an item is among the entries, if it's one. -/
+def Item.place (i : Item) : Option Position :=
+  match i.entry with
+  | .entry p _ => some p
+  | _ => none
+
+/-- Each entry's slot, by its position, in order. An entry being added,
+where no entry is, is a hole after the entry before it, or before the
+first; and there's no place to add an entry beside the hole. -/
+def slotsOf (places : List (Option Position)) (pending : Option Position) : Array (Position × Slot) :=
+  let positions := places.filterMap id
+  let pending := pending.filter fun p => !positions.contains p
+  let rec go (number : Nat) (prev : Option Position) (holeBefore : Bool) :
+      List Position → List (Position × Slot)
+    | [] => []
+    | p :: rest =>
+      let next := rest.head?
+      -- The hole is before this entry if this is the first and it sorts first.
+      let hb := if number == 1 then pending.filter fun h => Position.lt h p else none
+      let ha := pending.filter fun h => Position.lt p h && (next.map fun n => Position.lt h n).getD true
+      let beside := holeBefore || hb.isSome
+      (p, { number,
+            before := if beside then none else some (entryAt (Position.between prev (some p))),
+            after := if rest.isEmpty && ha.isNone then some (entryAt (Position.between (some p) none)) else none,
+            holeBefore := hb.map entryAt, holeAfter := ha.map entryAt }) :: go (number + 1) (some p) ha.isSome rest
+  (go 1 none false positions).toArray
+
+/-- The slots, held as one object while the entries' positions are. -/
+abbrev Slots := Shared (Array (Position × Slot))
+
+/-- An entry's slot, by its position. -/
+def slotAt (slots : Slots) (p : Position) : Slot :=
+  ((slots.val.binSearch (p, default) fun a b => Position.lt a.1 b.1).map (·.2)).getD {}
+
+/-- An item's part: for an entry, with its slot. -/
+def frameOf (slots : Slots) (i : Item) : Frame :=
+  match i.entry with
+  | .whole root => ⟨.whole root, i.reached, i.expressions, i.functions⟩
+  | .entry p v =>
+    let slot := slotAt slots p
+    ⟨.entry slot.number (entryAt p) v slot.before slot.after slot.holeBefore slot.holeAfter, i.reached,
+      i.expressions, i.functions⟩
+  | .empty => ⟨.empty (entryAt (Position.between none none)), ⟨[]⟩, [], false⟩
 
 namespace Frame
 
-/-- Whether a path is in a part, or the part in it. -/
+/-- Whether a path is in a part, or the part in it, or it's the hole of an
+entry being added that the part draws. -/
 def touches (f : Frame) (q : Path) : Bool :=
   match f.shape with
   | .whole _ => true
-  | .entry _ path _ _ _ => path.isPrefixOf q || q.isPrefixOf path
-  | .empty _ => false
+  | .entry _ path _ _ _ holeBefore holeAfter =>
+    path.isPrefixOf q || q.isPrefixOf path || holeBefore == some q || holeAfter == some q
+  | .empty point => q == point
 
 /-- What of each thing the editor's state holds a part is drawn with: the
 selection if it's in the part, the folds in it, the results of its
@@ -878,7 +987,7 @@ def selection (f : Frame) (s : Option Selection) : Option Selection := s.filter 
 def folds (f : Frame) (fs : List (Path × Bool)) : List (Path × Bool) :=
   match f.shape with
   | .whole _ => fs
-  | .entry _ path _ _ _ => fs.filter fun fold => path.isPrefixOf fold.1
+  | .entry _ path _ _ _ _ _ => fs.filter fun fold => path.isPrefixOf fold.1
   | .empty _ => []
 
 def results (f : Frame) (rs : List (Value × Outcome)) : List (Value × Outcome) :=
@@ -890,7 +999,7 @@ def layouts (f : Frame) (ls : Shared (List (Value × Value × Value))) : Shared 
 def marked (f : Frame) (m : Option CellId × Bool) : Option CellId :=
   match f.shape with
   | .whole _ => m.1
-  | .entry _ _ _ _ _ => m.1.filter fun cell => !m.2 || f.cells.val.any (·.1 == cell)
+  | .entry _ _ _ _ _ _ _ => m.1.filter fun cell => !m.2 || f.cells.val.any (·.1 == cell)
   | .empty _ => none
 
 end Frame
@@ -898,7 +1007,7 @@ end Frame
 /-- A part's input: the part, with what of the editor's state it's drawn
 with. -/
 def input (c : Seen) (f : Frame) : Input :=
-  { shape := f.shape, cells := f.cells, selection := f.selection c.selection, folds := f.folds c.folds,
+  { frame := f, selection := f.selection c.selection, folds := f.folds c.folds,
     results := f.results c.results, layouts := f.layouts c.layouts, marked := f.marked (c.marked, c.markedDefined),
     ribbon := c.ribbon }
 
@@ -942,9 +1051,40 @@ theorem input_of_not_touched (c c' : Seen) (f : Frame) (h : touched c c' f = fal
   simp only [input, hr, same_of_not_differs _ _ _ hs, same_of_not_differs _ _ _ hf,
     same_of_not_differs _ _ _ hres, same_of_not_differs _ _ _ hl, same_of_not_differs _ _ _ hm]
 
+/-- What a part's input is made from, besides its item: what the editor's
+state shows, and the entries' slots. -/
+structure Around where
+  seen : Seen
+  slots : Slots
+
+/-- A part's input, of its item. -/
+def inputOf (a : Around) (i : Item) : Input := input a.seen (frameOf a.slots i)
+
+/-- Whether a change of what's around touches a part, given the input it
+had: whether its slot differs, or what it's drawn with. -/
+def touchedAround (a a' : Around) (i : Item) (was : Input) : Bool :=
+  differs (fun slots => frameOf slots i) a.slots a'.slots || touched a.seen a'.seen was.frame
+
+def stillAround (a a' : Around) : Bool := equal a.slots a'.slots && still a.seen a'.seen
+
+theorem inputOf_of_not_touched (a a' : Around) (i : Item) (h : touchedAround a a' i (inputOf a i) = false) :
+    inputOf a' i = inputOf a i := by
+  simp only [touchedAround, Bool.or_eq_false_iff] at h
+  have hf : frameOf a.slots i = frameOf a'.slots i := same_of_not_differs _ _ _ h.1
+  have ht : touched a.seen a'.seen (frameOf a.slots i) = false := h.2
+  simp only [inputOf, ← hf]
+  exact input_of_not_touched a.seen a'.seen _ ht
+
+theorem not_touchedAround_of_still (a a' : Around) (h : stillAround a a' = true) (i : Item) (was : Input) :
+    touchedAround a a' i was = false := by
+  simp only [stillAround, Bool.and_eq_true] at h
+  simp [touchedAround, differs, h.1, not_touched_of_still a.seen a'.seen h.2]
+
 /-- A document's parts, laid out: all of it, worked out from nothing. -/
 def blocks (d : Document) (c : Seen) : List Block :=
-  ((frames ((itemKeys d.root (Cells.of d)).map item) (pendingEntry c.selection)).map (input c)).map part
+  let items := (entries d.root).map (item fun x => d.cells[x]?)
+  let around : Around := ⟨c, ⟨slotsOf (items.map Item.place) (pendingEntry c.selection)⟩⟩
+  (items.map (inputOf around)).map part
 
 end Display
 

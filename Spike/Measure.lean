@@ -16,14 +16,40 @@ def timed (name : String) (m : M) (events : List App.Event) : IO M := do
   IO.println s!"  {name}: {(t1 - t0) / events.length / 1000} µs an event, {edits / events.length} scene edits"
   return m
 
-/-- A notebook of `n` entries, each a record of a few fields and a list. -/
+/-- Ten cells that entries refer to: each a named value. -/
+def shared : List CellId :=
+  ["0a11b6dc2ad3a4f3b1c9d0a53c7f2e01", "1b22c7ed3be4b5a4c2dae1b64d8a3f12", "2c33d8fe4cf5c6b5d3ebf2c75e9b4a23",
+   "3d44e9af5da6d7c6e4fca3d86fac5b34", "4e55fab06eb7e8d7f5adb4e97abd6c45", "5f66abc17fc8f9e8a6bec5fa8bce7d56",
+   "6a77bcd28ad9aaf9b7cfd6ab9cdf8e67", "7b88cde39beabbaac8dae7bcadea9f78", "8c99def4acfbccbbd9ebf8cdbefbaa89",
+   "9daaefa5bdacddccEafca9decfacbb9a".toLower].map cell!
+
+def sharedValue (k n : Nat) : Value :=
+  Value.ofKind Kinds.valueWrapper [(Kinds.name, Value.text s!"shared {k}"), (Kinds.value, Value.u64 n)]
+
+/-- A notebook of `n` entries, each a record of a few fields and a list, and
+a reference to one of ten shared cells, which it shows. -/
 def notebook (n : Nat) : Document :=
   let entry (i : Nat) : Value :=
     .record [(Kinds.name, Value.text s!"entry {i}"),
       (Kinds.fields, .list ((Position.spread 12).zip ((List.range 12).map fun j => Value.u64 (i * j)))),
+      (Kinds.function, .cell (shared[i % 10]!)),
       (Kinds.body, .record [(Kinds.name, Value.text "some words that make the line long enough to wrap around"),
         (Kinds.value, Value.u64 i), (Kinds.params, Value.text "and a second field of text, to be sure it does")])]
-  { root := some (Value.ofKind Kinds.notebook [(Kinds.entries, .list ((Position.spread n).zip ((List.range n).map entry)))]) }
+  { root := some (Value.ofKind Kinds.notebook [(Kinds.entries, .list ((Position.spread n).zip ((List.range n).map entry)))]),
+    cells := (List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k 0)) {} }
+
+/-- The time edits take, each run of them: in microseconds. -/
+def timedEdits (name : String) (m : M) (runs : List (List Model.Edit)) : IO M := do
+  let t0 ← IO.monoNanosNow
+  let mut m := m
+  let mut edits := 0
+  for es in runs do
+    let t := App.applied Editor.app m es
+    m := t.1
+    edits := edits + t.2.length
+  let t1 ← IO.monoNanosNow
+  IO.println s!"  {name}: {(t1 - t0) / runs.length / 1000} µs each, {edits / runs.length} scene edits"
+  return m
 
 /-- How long a document takes: laid out from nothing, and for each kind of
 event, with what the view keeps. Files, or with a number, a notebook of
@@ -61,6 +87,17 @@ def main (args : List String) : IO Unit := do
       let m ← timed "the wheel, with something selected" m (List.replicate 20 (.scroll 0 0 0 (-1)))
       let m ← timed "a new entry, typed" m ([key 13] ++ ("\"some words".toList.map fun c => .text c.toString) ++ [key 13])
       let m ← timed "typing in it" m ("and more".toList.map fun c => App.Event.text c.toString)
+      if args.contains "typing" then
+        let _ ← timed "typing, 600 times" m ((List.replicate 300 (App.Event.text "x")) ++ List.replicate 300 (key 127))
+        return
       let m ← timed "a function added" m [key 13, .text "l", .text "a", .text "m", key 13]
       let m ← timed "typing in its definition" m ("named".toList.map fun c => App.Event.text c.toString)
+      let m ← if path.toNat?.isSome then do
+          let m ← timedEdits "a definition a tenth of the entries reach, written" m
+            ((List.range 20).map fun j => [Model.Edit.cell shared[3]! (some (sharedValue 3 (j + 1)))])
+          let m ← timedEdits "every definition written at once" m
+            ((List.range 5).map fun j => [Model.Edit.cells
+              ((List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k (100 + j))) {})])
+          pure m
+        else pure m
       if !(m.shown.1 == (Editor.view.f m.state).1) then IO.println "  !! the scene kept isn't the model's view"

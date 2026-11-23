@@ -79,7 +79,7 @@ partial def settle (m : Model) (path : Path) : Model :=
 /-- The model with a value written at a path, the selection settled in it. -/
 def put (m : Model) (path : Path) (v : Value) : Model :=
   match m.doc.set path v with
-  | some doc => (m.write doc).settle path
+  | some doc => (m.write doc (at_ := some path)).settle path
   | none => m
 
 /-- A new record of a kind at a path. A kind that's referred to by name, a
@@ -95,7 +95,7 @@ def putNew (m : Model) (path : Path) (kind : CellId) : Model :=
   if kind == Kinds.lambda || kind == Kinds.valueWrapper || kind == Kinds.def_ then
     let (id, m) := m.fresh
     match m.doc.set path (.cell id) with
-    | some doc => (m.write { doc with cells := doc.cells.insert id record }).settle path
+    | some doc => (m.write { doc with cells := doc.cells.insert id record } (at_ := some path) (also := [id])).settle path
     | none => m
   else m.put path record
 
@@ -166,7 +166,7 @@ def valueOffers (m : Model) (path : Path) (query : String) : List Offer :=
     let cells : List Offer := (namedCells m).flatMap fun (c, name, v) =>
       let reference : Offer := ⟨name, (v.kind?.map (m.doc.shown m.library)).getD "cell", false,
         fun m => match m.doc.set path (.cell c) with
-          | some doc => (m.write doc).rest path
+          | some doc => (m.write doc (at_ := some path)).rest path
           | none => m⟩
       -- A function with no parameters is a type: there's nothing to call.
       let isType := ((Builtin.function? c).map (·.params.isEmpty)).getD false
@@ -184,7 +184,8 @@ def valueOffers (m : Model) (path : Path) (query : String) : List Offer :=
       else [⟨query, "cell", true, fun m =>
         let (id, m) := m.fresh
         match m.doc.set path (.cell id) with
-        | some doc => (m.write { doc with cells := doc.cells.insert id (Builtin.named query) }).rest path
+        | some doc =>
+          (m.write { doc with cells := doc.cells.insert id (Builtin.named query) } (at_ := some path) (also := [id])).rest path
         | none => m⟩]
     -- Among a lambda's parameters, what's typed is first a new parameter's name.
     let inParams := path.dropLast.getLast? == some (.key Kinds.params)
@@ -212,7 +213,8 @@ def labelOffers (m : Model) (path : Path) (query : String) : List Offer :=
       if query.isEmpty then []
       else [⟨query, "label", true, fun m =>
         let (id, m) := m.fresh
-        let m := { m with doc := { m.doc with cells := m.doc.cells.insert id (Builtin.named query) } }
+        let m := { m with doc := { m.doc with cells := m.doc.cells.insert id (Builtin.named query) },
+                          written := id :: m.written }
         m.openAt (path ++ [.key id])⟩]
     declared ++ labels ++ common ++ new
   | _ => []
@@ -263,7 +265,7 @@ def writeLine (m : Model) (path : Path) (text : String) : Model :=
       else none
     | none => none
   match bytes.bind fun b => m.doc.set (path ++ [.key Kinds.bytes]) (.blob b) with
-  | some doc => m.write doc (typing := true)
+  | some doc => m.write doc (typing := true) (at_ := some path)
   | none => m
 
 /-- The model with what's being typed changed: a line is written through. -/
@@ -392,7 +394,7 @@ def delete (laid : Model → Layout) (m : Model) (sel : Selection) : Model :=
   if (m.at? sel.path).isSome && sel.stage == .edge then
     match m.doc.delete sel.path with
     | some doc =>
-      let m := m.write doc
+      let m := m.write doc (at_ := some sel.path)
       if holeDrawn m sel.path then { m with selection := some { path := sel.path, stage := .pending } }
       else restDrawn laid m sel.path.dropLast
     | none => m

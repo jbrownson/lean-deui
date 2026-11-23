@@ -126,6 +126,20 @@ theorem all2_sound (same : A → A → Bool) (sound : ∀ a b, same a b = true �
       simp only [all2, Bool.and_eq_true] at h
       rw [sound x y h.1, ih ys h.2]
 
+/-- Lists whose elements give the same by `g`, one by one, give the same
+list by it. -/
+theorem all2_map {B : Type} [DecidableEq B] (g : A → B) (xs ys : List A)
+    (h : all2 (fun x y => decide (g x = g y)) xs ys = true) : xs.map g = ys.map g := by
+  induction xs generalizing ys with
+  | nil => cases ys with
+    | nil => rfl
+    | cons y ys => simp [all2] at h
+  | cons x xs ih => cases ys with
+    | nil => simp [all2] at h
+    | cons y ys =>
+      simp only [all2, Bool.and_eq_true, decide_eq_true_eq] at h
+      simp only [List.map, h.1, ih ys h.2]
+
 /-- Whether two lists are the same: at once if they're the one object, as a
 list is that was kept rather than made again. -/
 def alike (same : A → A → Bool) (refl : ∀ a, same a a = true) (xs ys : List A) : Bool :=
