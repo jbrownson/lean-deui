@@ -6,4 +6,6 @@ import Progred.Layout
 import Progred.Display
 import Progred.Model
 import Progred.Editing
+import Progred.Editor
 import Progred.Run
+import Progred.Lean

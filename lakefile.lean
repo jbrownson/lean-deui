@@ -52,3 +52,14 @@ lean_exe gid_round_trip where
 /-- Prints GID text files as the editor would show them. -/
 lean_exe gid_show where
   root := `Spike.ShowGid
+
+/-- Plays keys through Progred with no window. -/
+lean_exe progred_play where
+  root := `Spike.Play
+
+/-- Progred, in a window. -/
+lean_exe progred where
+  root := `Progred.Main
+  supportInterpreter := true
+  moreLinkObjs := #[libscreen]
+  moreLinkArgs := #["-ldl"]

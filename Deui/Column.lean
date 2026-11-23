@@ -16,7 +16,7 @@ structure Row where
   s : Scene
 
 /-- Rows are replaced whole; the rows change as a list does. -/
-abbrev rowEdits : EditStructure := whole (none Row)
+abbrev rowEdits : EditStructure := whole (plain Row)
 abbrev rowsEdits : EditStructure := Lists.editStructure rowEdits
 
 /-- A row at `y`: its scene, in a group placed at the row's top. -/

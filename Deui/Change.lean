@@ -26,7 +26,7 @@ structure ChangeStructure where
   reach : reaches edits
 
 /-- The edits of values that have none of their own. -/
-def none (A : Type) : EditStructure :=
+def plain (A : Type) : EditStructure :=
   ⟨A, Empty, fun e _ => nomatch e⟩
 
 /-- The value a run of edits leaves, applied in order. -/

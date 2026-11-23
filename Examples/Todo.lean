@@ -21,7 +21,7 @@ structure Item where
 
 /-- An item changes by being replaced; the items change as a list does,
 or scroll. Each item's row is 40 pixels tall. -/
-abbrev itemEdits : EditStructure := whole (none Item)
+abbrev itemEdits : EditStructure := whole (plain Item)
 def rowHeight (_ : Item) : Nat := 40
 abbrev itemsEdits : EditStructure := Lists.Scrolled.Scroll.editStructure itemEdits rowHeight
 

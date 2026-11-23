@@ -111,16 +111,33 @@ partial def loop (app : App cs) (w : Window) (background : UInt32) (m : Model ap
   unless es.any (· matches .close) do
     loop app w background m'
 
+/-- As `loop`, and after each batch of events asks `outside` for edits that
+come from outside the app: results of work, something read. They go to the
+state and the screen as an event's do (`edited_shows`, `edited_edits`). -/
+partial def loopWith (app : App cs) (outside : cs.Value → IO (List cs.Edit)) (w : Window)
+    (background : UInt32) (m : Model app) : IO Unit := do
+  let (m, edits) := edited app m (← outside m.state)
+  w.edit edits
+  w.draw background
+  let es ← w.events
+  let (m, edits) := turns app m es
+  w.edit edits
+  unless es.any (· matches .close) do
+    loopWith app outside w background m
+
 /-- Runs an app in a window of the given size on a background of 0xRRGGBB,
 its labels in the TrueType font at `font`, from `state`, until the window
-closes. -/
+closes. `outside`, if given, supplies edits from outside the app after each
+batch of events. -/
 def run (app : App cs) (title font : String) (width height background : UInt32)
-    (state : cs.Value) : IO Unit := do
+    (state : cs.Value) (outside : Option (cs.Value → IO (List cs.Edit)) := none) : IO Unit := do
   let w ← Window.open title width height
   try w.font font catch e => IO.println s!"no font, so labels are left out: {e}"
   let m := start app state
   w.setScene m.scene
-  loop app w background m
+  match outside with
+  | some outside => loopWith app outside w background m
+  | none => loop app w background m
   w.close
 
 end Deui.Screen

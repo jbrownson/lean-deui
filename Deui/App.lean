@@ -77,12 +77,16 @@ def handlers {cs : EditStructure} (press : cs.Value → Hit → List cs.Edit)
 /-- The model at launch: the state, and its view. -/
 def start (state : cs.Value) : Model app := ⟨state, app.view.f state⟩
 
-/-- An event's turn: the model after it, and the scene edits the view's
-derivative made, from what the view kept. -/
-def turn (m : Model app) (e : Event) : Model app × List SceneEdit :=
-  let es := app.respond m.state m.scene e
+/-- The model after a run of edits to the state, and the scene edits the
+view's derivative made of them, from what the view kept. -/
+def edited (m : Model app) (es : List cs.Edit) : Model app × List SceneEdit :=
   let r := app.view.df m.shown.2 es
   (⟨run cs es m.state, (run sceneEdits r.1 m.shown.1, r.2)⟩, r.1)
+
+/-- An event's turn: the model after the edits the app answers it with, and
+the scene edits they made. -/
+def turn (m : Model app) (e : Event) : Model app × List SceneEdit :=
+  edited app m (app.respond m.state m.scene e)
 
 /-- The model after an event. -/
 def step (m : Model app) (e : Event) : Model app := (turn app m e).1
@@ -108,13 +112,23 @@ def shows (m : Model app) : Prop := m.shown = app.view.f m.state
 /-- At launch, the scene on screen is the view of the state. -/
 theorem start_shows (state : cs.Value) : shows app (start app state) := rfl
 
-/-- If the view's derivative is correct, an event keeps the scene on screen
-the view of the state, without running the view again. -/
-theorem step_shows (ok : app.view.ok) (m : Model app) (e : Event) (h : shows app m) :
-    shows app (step app m e) := by
+/-- If the view's derivative is correct, edits to the state keep the scene
+on screen the view of the state, without running the view again. -/
+theorem edited_shows (ok : app.view.ok) (m : Model app) (es : List cs.Edit) (h : shows app m) :
+    shows app (edited app m es).1 := by
   unfold shows at h ⊢
-  simp only [step, turn]
+  simp only [edited]
   rw [← ok, ← h]
+
+/-- And the scene edits they made take the scene on screen before them to
+the one after. -/
+theorem edited_edits (m : Model app) (es : List cs.Edit) :
+    (edited app m es).1.scene = run sceneEdits (edited app m es).2 m.scene := rfl
+
+/-- So an event keeps the scene on screen the view of the state. -/
+theorem step_shows (ok : app.view.ok) (m : Model app) (e : Event) (h : shows app m) :
+    shows app (step app m e) :=
+  edited_shows app ok m _ h
 
 /-- And so does any run of events. -/
 theorem play_shows (ok : app.view.ok) (es : List Event) :
