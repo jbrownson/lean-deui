@@ -318,7 +318,7 @@ lean_obj_res deui_window_open(b_lean_obj_arg title, uint32_t width, uint32_t hei
     return ds_sdl_fail("SDL_Init");
   }
   ds.window = ds_SDL_CreateWindow(lean_string_cstr(title), (int)width, (int)height,
-    SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   if (ds.window == NULL) {
     return ds_sdl_fail("SDL_CreateWindow");
   }
@@ -485,6 +485,8 @@ static void ds_event(DsWords* b, SDL_Event* ev) {
       ds_put(b, 3);
       ds_put(b, ds_key(ev->key.key, ev->key.scancode));
       ds_put(b, ev->key.down ? 1 : 0);
+      ds_put(b, ((ev->key.mod & SDL_KMOD_SHIFT) ? 1 : 0) | ((ev->key.mod & SDL_KMOD_CTRL) ? 2 : 0)
+        | ((ev->key.mod & SDL_KMOD_ALT) ? 4 : 0) | ((ev->key.mod & SDL_KMOD_GUI) ? 8 : 0));
       break;
     case SDL_EVENT_TEXT_INPUT:
       ds_put(b, 4);
@@ -508,6 +510,11 @@ static void ds_event(DsWords* b, SDL_Event* ev) {
     case SDL_EVENT_WINDOW_FOCUS_LOST:
       ds_put(b, 8);
       ds_put(b, ev->type == SDL_EVENT_WINDOW_FOCUS_GAINED ? 1 : 0);
+      break;
+    case SDL_EVENT_WINDOW_RESIZED:
+      ds_put(b, 9);
+      ds_put(b, (u32)ev->window.data1);
+      ds_put(b, (u32)ev->window.data2);
       break;
     default:
       b->n = at;

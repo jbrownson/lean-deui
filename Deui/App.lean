@@ -3,9 +3,8 @@ import Deui.Scene
 /-!
 An app: a state, edited as its edit structure says, its view, an
 incremental function from runs of the state's edits to runs of the scene's
-that keeps what its derivative needs, and four handlers: from the state
-and what a press hit, which key went down, what was typed, or how far the
-wheel turned, to a run of edits. An event's edits go to the state, and through the view's derivative
+that keeps what its derivative needs, and a handler: from the state, the
+scene on screen and an event, to a run of edits. An event's edits go to the state, and through the view's derivative
 to the scene on screen. The view itself runs once, at launch.
 -/
 
@@ -14,25 +13,37 @@ namespace Deui.App
 open Deui
 
 /-- An event, as the screen reports it. Coordinates are in the window's
-pixels from its top left. A key is Base's code for it: its character in
-lower case, Return 13, Backspace 127, the arrows from 63232. Text is what
-the keys typed, never a control character. -/
+pixels from its top left. A key is its character in lower case, or Return
+13, Tab 9, Escape 27, Backspace 127, Delete 63272, the arrows up, down,
+left and right from 63232, Home 63273, End 63275, Page Up 63276, Page Down
+63277; `mods` says which modifiers were held (`Mods`). Text is what the
+keys typed, never a control character. A scroll's `dy` is toward the top.
+`resize` gives the window's new size. -/
 inductive Event where
   | press (x y : Float) (button : UInt32) (down : Bool)
   | move (x y : Float)
-  | key (code : UInt32) (down : Bool)
+  | key (code : UInt32) (down : Bool) (mods : UInt32)
   | text (t : String)
   | scroll (x y dx dy : Float)
   | close
   | leave
   | focus (on : Bool)
+  | resize (width height : UInt32)
+
+/-! A key event's modifiers, as bits of its `mods`. -/
+namespace Mods
+def shift : UInt32 := 1
+def control : UInt32 := 2
+def alt : UInt32 := 4
+def super : UInt32 := 8
+/-- Whether `mods` has every bit of `m`. -/
+def has (mods m : UInt32) : Bool := mods &&& m == m
+end Mods
 
 structure App (cs : EditStructure) where
   view : Cached (runs cs) (runs sceneEdits)
-  press : cs.Value → Hit → List cs.Edit
-  key : cs.Value → UInt32 → List cs.Edit
-  text : cs.Value → String → List cs.Edit
-  scroll : cs.Value → Float → List cs.Edit
+  /-- The edits an event makes to the state, given the scene on screen. -/
+  respond : cs.Value → Scene → Event → List cs.Edit
 
 /-- What an app holds between events: its state, and what's shown: the
 scene on screen, with what the view keeps. -/
@@ -47,17 +58,20 @@ def Model.scene {app : App cs} (m : Model app) : Scene := m.shown.1
 /-- A pointer's coordinate, in whole pixels. -/
 def coordinate (v : Float) : Int32 := (max v 0).toUInt32.toInt32
 
-/-- The edits an event makes to the state: a button pressed down, through
-what it hit in the scene on screen, a key pressed down, text typed, or the
-wheel turned (`dy`, toward the top). Other events make none. -/
-def respond (state : cs.Value) (scene : Scene) : Event → List cs.Edit
+/-- A handler made of four: from the state and what a press hit, which key
+went down, what was typed, or how far the wheel turned. A button pressed
+down goes through what it hit in the scene on screen; other events make no
+edits. -/
+def handlers {cs : EditStructure} (press : cs.Value → Hit → List cs.Edit)
+    (key : cs.Value → UInt32 → List cs.Edit) (text : cs.Value → String → List cs.Edit)
+    (scroll : cs.Value → Float → List cs.Edit) (state : cs.Value) (scene : Scene) : Event → List cs.Edit
   | .press x y _ true =>
     match scene.hit (coordinate x) (coordinate y) with
-    | some h => app.press state h
+    | some h => press state h
     | .none => []
-  | .key code true => app.key state code
-  | .text t => app.text state t
-  | .scroll _ _ _ dy => app.scroll state dy
+  | .key code true _ => key state code
+  | .text t => text state t
+  | .scroll _ _ _ dy => scroll state dy
   | _ => []
 
 /-- The model at launch: the state, and its view. -/
@@ -66,7 +80,7 @@ def start (state : cs.Value) : Model app := ⟨state, app.view.f state⟩
 /-- An event's turn: the model after it, and the scene edits the view's
 derivative made, from what the view kept. -/
 def turn (m : Model app) (e : Event) : Model app × List SceneEdit :=
-  let es := respond app m.state m.scene e
+  let es := app.respond m.state m.scene e
   let r := app.view.df m.shown.2 es
   (⟨run cs es m.state, (run sceneEdits r.1 m.shown.1, r.2)⟩, r.1)
 

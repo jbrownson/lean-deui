@@ -5,6 +5,7 @@ import Deui.Column
 import Deui.Drawing
 import Deui.Scroll
 import Deui.Drawn
+import Deui.Redraw
 import Deui.App
 import Deui.Screen
 import Deui.Axioms

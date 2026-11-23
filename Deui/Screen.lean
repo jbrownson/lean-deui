@@ -57,12 +57,13 @@ Each event's words, after its length: its kind, then its fields, a
 coordinate as a Float's 64 bits in two words, high first.
   1 x y button down   a mouse button, W3C's numbering, down 1 or 0
   2 x y               the mouse moved
-  3 code down         a key, Base's code
+  3 code down mods    a key, and the modifiers held (App.Mods)
   4 c c ...           text typed, as code points
   5 x y dx dy         the wheel, under (x, y)
   6                   the window asked to close
   7                   the mouse left the window
-  8 on                the window gained (1) or lost (0) the focus -/
+  8 on                the window gained (1) or lost (0) the focus
+  9 width height      the window's new size -/
 
 def float (ws : Array UInt32) (i : Nat) : Float :=
   Float.ofBits ((ws.getD i 0).toUInt64 <<< 32 ||| (ws.getD (i + 1) 0).toUInt64)
@@ -72,12 +73,13 @@ def event (ws : Array UInt32) : Option Event :=
   match w 0 0 with
   | 1 => some (.press (float ws 1) (float ws 3) (w 5 0) (w 6 0 != 0))
   | 2 => some (.move (float ws 1) (float ws 3))
-  | 3 => some (.key (w 1 0) (w 2 0 != 0))
+  | 3 => some (.key (w 1 0) (w 2 0 != 0) (w 3 0))
   | 4 => some (.text (String.ofList ((ws.extract 1 ws.size).toList.map fun c => Char.ofNat c.toNat)))
   | 5 => some (.scroll (float ws 1) (float ws 3) (float ws 5) (float ws 7))
   | 6 => some .close
   | 7 => some .leave
   | 8 => some (.focus (w 1 0 != 0))
+  | 9 => some (.resize (w 1 0) (w 2 0))
   | _ => .none
 
 /-- The events, from their words. -/

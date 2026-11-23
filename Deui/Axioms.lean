@@ -18,10 +18,10 @@ new axiom. -/
 /-- info: 'Deui.Lists.map_inc_ok' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.Lists.map_inc_ok
 
-/-- info: 'Deui.App.play_shows' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Deui.App.play_shows' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.App.play_shows
 
-/-- info: 'Deui.App.turns_edits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Deui.App.turns_edits' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.App.turns_edits
 
 /-- info: 'Deui.Lists.Scrolled.view_inc_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/

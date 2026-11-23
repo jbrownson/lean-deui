@@ -9,7 +9,7 @@ def click (x y : Float) : App.Event := .press x y 0 true
 
 /-- A new item, typed in; tick the second item's box; delete the third. -/
 def events : List App.Event :=
-  [.key 13 true, .text "Ship deui", click 20 58, click 340 100]
+  [.key 13 true 0, .text "Ship deui", click 20 58, click 340 100]
 
 def main : IO Unit := do
   let m := App.play app (App.start app items) events
