@@ -52,7 +52,14 @@ Read `README.md` first for what the repository is.
   `view_ok` is their laws composed. What a part's layout reads has to be
   in its `Input` (`Progred/Display.lean`): a layout that read anything
   else would be kept when it shouldn't be. Something new the drawing
-  depends on goes into `Seen` and `Input`.
+  depends on goes into `Seen` and a `Frame`'s restriction of it, and
+  `touched` then asks it of each part.
+- The model's edits say which definitions were written. A handler works
+  on the model, and what it writes to a cell has to be noted: write the
+  document through `Model.write` with the path written at, or add the
+  cell to `written`. A cell written and not noted keeps its old
+  definition in the state the app holds. Setting `doc` directly is how
+  that happens.
 - `progred_measure` says what events cost; run it before and after a
   change to the view, on a notebook (`progred_measure 300`).
 - Skinny is the language: the subset of Lean that `Progred/Skinny.lean`

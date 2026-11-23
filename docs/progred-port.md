@@ -177,24 +177,40 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   append, length, map, filter, fold, range, show (`Progred/Builtin.lean`).
 - **Monospace text.** Layout is in characters: a doc chooses its inline or its
   stacked form against a ribbon, as the Rust layout's alternatives do.
-- **The view is a derivative.** The model is still replaced whole by an event,
-  and the view finds what that changed (`Progred/Editor.lean`): the document's
-  definitions are kept while they're the same; each entry of the root notebook
-  is worked out again (what it reaches, its evaluations) only where its value
-  or the definitions changed; each part's input is compared with what it was,
-  and a part is laid out only where it differs; the parts' lines are joined
-  and compared where a part was laid out again; the window shows the lines
-  that fit; and each line that changed is a row of the scene replaced. Every
-  step is one of deui's, proved, and `view_ok` is their laws composed. A
-  part's `Input` holds all its layout reads, the definitions it reaches
-  among them, which is what makes keeping its layout sound. Equality is
-  decided through `withPtrEqDecEq`: a value that's one object in both is
-  equal at once.
+- **The model's edits say what changed.** An edit is a cell's definition,
+  written or taken away; all the definitions; or the rest, which is everything
+  but the definitions. A handler still works on the model, as a function from
+  model to model, and notes the cells it writes; its edits are those cells'
+  definitions, then the rest (`Model.emitted`). The state the app holds is
+  those edits applied, so a cell written without being noted keeps its old
+  definition there: `Model.write` takes the path written at for that.
+- **The view is a derivative, and each step is sensitive to what it reads**
+  (`Progred/Editor.lean`). The root's entries are compared with what they
+  were, while the root isn't the same object. Each entry becomes an item: what
+  it reaches, its evaluations, and every cell it asked for on the way, defined
+  or not. An edit that writes a definition is asked of each item, and only one
+  that asked for that cell is worked out again: `reach_agree` says two tables
+  of definitions that agree on the cells asked for give the same, and
+  `defined_other` that writing one definition leaves the others. Each item
+  becomes a part's input: the item, its slot (its number and the places to add
+  an entry beside it, by its position), and what of the editor's state it's
+  drawn with, restricted to it. A change of that is asked of each part, and
+  only one whose restriction differs gets a new input, so a selection that
+  moves touches the parts it leaves and enters. A part is laid out where its
+  input changed; its lines are compared with what they were; the window shows
+  the lines that fit; and each line that changed is a row of the scene
+  replaced. Every step is one of deui's, proved, and `view_ok` is their laws
+  composed. Equality is decided through `withPtrEqDecEq`: a value that's one
+  object in both is equal at once.
+- **An entry being added is a line of the part beside it,** with no number
+  until it's there, so opening the place for one changes one part and
+  renumbers nothing.
 - **Handlers read what the view keeps.** Navigation and clicks use the layout
   the view kept for the model (`laidOf_view`), and where an edit needs the
-  layout of a model it's passing through, the same derivative gives it
-  (`relaid_view`). Scrolling to the selection follows an event's edits as
-  `settle`, since it needs the layout of the new model.
+  layout of a model it's passing through, the same derivative gives it, of the
+  model its edits so far make (`relaid_view`). Scrolling to the selection
+  follows an event's edits as `settle`, since it needs the layout of the new
+  model.
 - **Outside the pure update:** fresh cell ids, evaluations, the clipboard and
   saving are done by the window's loop after each batch of events and come
   back as edits (`Progred/Outside.lean`); an evaluation is remembered by the
@@ -245,10 +261,12 @@ the window was driven under Xvfb):
 - Projections defined in the document: a def's `projection` as a layout, and
   as a function of the record (`examples/projections.gid`), their parts edited
   in place.
-- The view by derivative. `progred_measure`, on a notebook of 3,000 lines in
-  300 entries: the wheel about 15 µs, an arrow key 0.4 ms, a keystroke 0.3 ms,
-  against 15 ms to lay it out from nothing; at 30,000 lines in 3,000 entries,
-  0.13 ms, 3.8 ms and 4.9 ms against 167 ms.
+- The view by derivative. `progred_measure`, on a notebook of 3,300 lines in
+  300 entries, a tenth of which reach each of ten definitions: the wheel about
+  12 µs, a keystroke 0.3 ms, an arrow key 0.3 to 1.5 ms, a definition written
+  7 ms with 68 scene edits, against 16 ms to lay it out from nothing. At
+  33,000 lines in 3,000 entries: 0.1 ms, 3.5 ms, up to 11 ms, and 53 ms,
+  against 173 ms.
 
 Not here yet:
 
@@ -263,15 +281,20 @@ Not here yet:
 - Proportional text and delimiters that span their block.
 - New and Open; a mark that the document has unsaved changes.
 - CAM, Fidget, the web and macOS targets.
-- What the view still does in proportion to the document. An event that
-  changes the selection or the document works out every part's input again
-  and compares it, about a microsecond a part; the scrolled list counts the
-  rows above the window for an edit among them; and a root that isn't a
-  notebook is one part, laid out whole (the Rust version's own example files,
-  whose roots are its panes, are like that here). An edit to a definition
-  works out again what every entry reaches. A function projection's results
-  go to every part that has such a kind, so they're all laid out again when
-  one record's changes.
+- What the view still does in proportion to the document. Its lists are
+  linked lists, so an edit at a position costs the position: finding the
+  entry, patching each step's list, counting the rows above the window. That's
+  the few milliseconds a keystroke takes among 3,000 entries, and it's why an
+  edit that lays out more than `manyParts` parts draws the window afresh. A
+  sequence held as a tree would make these the logarithm. A part is still
+  laid out whole when anything it reads changes: an entry that reaches a
+  definition is laid out again when it's written, though it may show only its
+  name; and a root that isn't a notebook is one part (the Rust version's own
+  example files, whose roots are its panes, are like that here). Reading by
+  the cell inside a layout, as items do, is the way on from here. A function
+  projection's results go to every part that has such a kind.
+- Nothing checks that a handler notes every cell it writes; the state follows
+  the edits, so a missed one shows as a write that didn't take.
 - Laws about Progred beyond its view: `view_ok` says the scene on screen is
   the view of the model, and nothing says the editing is right. What runs
   outside the pure update (Lean, the files, the clipboard) isn't in any law,

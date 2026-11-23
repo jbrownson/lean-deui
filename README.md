@@ -49,17 +49,22 @@ module does.
 - `Drawn.lean`: a drawing on the screen, as a column's children. Its
   derivative turns each drawing edit into scene edits, without needing the
   drawing (`inc_ok`).
-- `Diff.lean`, `Combine.lean`, `Flatten.lean`, `Anchored.lean`: what a
-  view is put together from, each correct if its parts are. `change` gives
-  the edits between two lists, leaving what they start and end with in
-  common; `tracked` is a list that's a function of a value, as edits from
-  what it was, and `memo` a function kept while its input is the same, so
-  a state replaced whole still reaches the screen as the edits that
-  matter. `flatChange` joins lists of rows, comparing only where a list
-  changed; `anchored` puts rows at an offset into the scrolled list;
-  `layers` and `keyed` put scenes one over another, and rebuild one when
-  its key changes. What's called the same has to be equal (that's proved),
-  and is found at once for a value that's one object in both.
+- `Diff.lean`, `Combine.lean`, `Sift.lean`, `Flatten.lean`,
+  `Anchored.lean`: what a view is put together from, each correct if its
+  parts are. `sifted` is a list mapped under a context: when the context
+  is edited, each element says whether the edit touches it, and one that
+  says no gives what it gave and makes no edit; what makes it right is the
+  law that an element untouched gives the same under the edited context.
+  `change` gives the edits between two lists, leaving what they start and
+  end with in common; `tracked` is a list that's a function of a value, as
+  edits from what it was, and `memo` a function kept while its input is
+  the same. `flatBy` joins lists of rows, an element edited making edits
+  only where its rows differ; `anchored` puts rows at an offset into the
+  scrolled list; `layers` and `keyed` put scenes one over another, and
+  draw one afresh when its key changes, or when an edit is large enough
+  that drawing afresh costs less. What's called the same has to be equal
+  (that's proved), and is found at once for a value that's one object in
+  both.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
   a key, text typed or the wheel, to edits; a handler also reads what the
@@ -130,9 +135,13 @@ version does, what this one decides, and what isn't here yet.
   reaches it from outside (fresh ids, evaluations' results, what
   projections that are functions give, the clipboard, saving); and the
   program. The view is deui's pieces composed, and `view_ok` follows from
-  theirs: the scene on screen is the view of the model, though an edit
-  lays out only the entries it touches and changes only the rows that
-  differ.
+  theirs: the scene on screen is the view of the model. The model's edits
+  say what changed: a cell's definition, all of them, or the rest. Each
+  entry's part keeps the cells it asked for, and a definition written
+  works out again only the parts that asked for it (`item_untouched`); a
+  selection that moves gives new inputs only to the parts it leaves and
+  enters (`inputOf_of_not_touched`); a part laid out again changes only
+  its rows that differ.
 
 A kind's records are drawn by its def's `projection`, written in the
 document: a layout (`row`, `column`, `indent`, `either`, `words`, `faint`,
@@ -142,9 +151,11 @@ is read with no code run; a function is run by Lean on each record of the
 kind. `examples/projections.gid` has one of each: a fraction, and a bar as
 long as its amount.
 
-On a notebook of 3,000 lines in 300 entries (`progred_measure 300`): the
-wheel takes about 15 µs, an arrow key 0.4 ms, a keystroke of typing 0.3 ms,
-against 15 ms to lay the document out from nothing.
+On a notebook of 3,300 lines in 300 entries (`progred_measure 300`): the
+wheel takes about 12 µs, a keystroke of typing 0.3 ms, an arrow key 0.3 to
+1.5 ms (more when it lands on a cell that other entries show, since they
+mark it), and writing a definition that a tenth of the entries reach 7 ms,
+against 16 ms to lay the document out from nothing.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).
