@@ -3,9 +3,9 @@ import Deui.Scene
 /-!
 An app: a state, edited as its edit structure says, its view, an
 incremental function from runs of the state's edits to runs of the scene's
-that keeps what its derivative needs, and three handlers: from the state
-and what a press hit, which key went down or what was typed, to a run of
-edits. An event's edits go to the state, and through the view's derivative
+that keeps what its derivative needs, and four handlers: from the state
+and what a press hit, which key went down, what was typed, or how far the
+wheel turned, to a run of edits. An event's edits go to the state, and through the view's derivative
 to the scene on screen. The view itself runs once, at launch.
 -/
 
@@ -32,6 +32,7 @@ structure App (cs : EditStructure) where
   press : cs.Value → Hit → List cs.Edit
   key : cs.Value → UInt32 → List cs.Edit
   text : cs.Value → String → List cs.Edit
+  scroll : cs.Value → Float → List cs.Edit
 
 /-- What an app holds between events: its state, and what's shown: the
 scene on screen, with what the view keeps. -/
@@ -47,8 +48,8 @@ def Model.scene {app : App cs} (m : Model app) : Scene := m.shown.1
 def coordinate (v : Float) : Int32 := (max v 0).toUInt32.toInt32
 
 /-- The edits an event makes to the state: a button pressed down, through
-what it hit in the scene on screen, a key pressed down, or text typed. Other
-events make none. -/
+what it hit in the scene on screen, a key pressed down, text typed, or the
+wheel turned (`dy`, toward the top). Other events make none. -/
 def respond (state : cs.Value) (scene : Scene) : Event → List cs.Edit
   | .press x y _ true =>
     match scene.hit (coordinate x) (coordinate y) with
@@ -56,6 +57,7 @@ def respond (state : cs.Value) (scene : Scene) : Event → List cs.Edit
     | .none => []
   | .key code true => app.key state code
   | .text t => app.text state t
+  | .scroll _ _ _ dy => app.scroll state dy
   | _ => []
 
 /-- The model at launch: the state, and its view. -/

@@ -1,4 +1,6 @@
 import Deui.Column
+import Deui.Drawn
+import Deui.Scroll
 import Deui.App
 
 /-! Every law's axioms, checked by `lake build`: it fails on a `sorry` or a
@@ -21,3 +23,9 @@ new axiom. -/
 
 /-- info: 'Deui.App.turns_edits' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Deui.App.turns_edits
+
+/-- info: 'Deui.Lists.Scrolled.view_inc_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Lists.Scrolled.view_inc_ok
+
+/-- info: 'Deui.Drawing.inc_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Drawing.inc_ok

@@ -2,6 +2,9 @@ import Deui.Change
 import Deui.Lists
 import Deui.Scene
 import Deui.Column
+import Deui.Drawing
+import Deui.Scroll
+import Deui.Drawn
 import Deui.App
 import Deui.Screen
 import Deui.Axioms

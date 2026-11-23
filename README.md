@@ -42,9 +42,16 @@ module does.
   shifts them back up, and replacing one with one as tall swaps it in
   place. `one_ok` and `inc_ok` say it's correct for every edit and every
   run of them.
+- `Drawing.lean`, `Scroll.lean`: a long list seen through a window, from
+  lean-puri: the list held split at the first row that shows, so scrolling
+  touches only the rows that enter or leave, and its view, the drawing of
+  the rows that show (`Lists.Scrolled.view`), with its law (`view_ok`).
+- `Drawn.lean`: a drawing on the screen, as a column's children. Its
+  derivative turns each drawing edit into scene edits, without needing the
+  drawing (`inc_ok`).
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
-  a key or text typed, to edits. An event's edits go to the state, and
+  a key, text typed or the wheel, to edits. An event's edits go to the state, and
   through the view's derivative to the scene on screen. `play_shows` says
   that if the derivative is correct, the scene on screen is always the view
   of the state, as if it had run again. `turns` gives the scene edits a
@@ -63,14 +70,17 @@ module does.
 
 `Examples/`:
 
-- `Todo.lean`: a to-do list. Click an item's box to tick it and its x to
-  delete it; Return starts a new item at the top, typing writes into it,
-  and Backspace takes a letter back. Its view is an item's row mapped over
-  the list (`map.inc`), then the column, each `cached` and joined by
-  `compose`, so its law (`viewOk`) follows from theirs.
+- `Todo.lean`: a to-do list, in a window that shows what fits. Click an
+  item's box to tick it and its x to delete it; Return starts a new item at
+  the top, typing writes into it, Backspace takes a letter back, and the
+  wheel scrolls. Its view is what shows of the scrolled list, then those
+  rows on the screen, each `cached` and joined by `compose`, so its law
+  (`viewOk`) follows from theirs. Only the rows that show are in the
+  scene.
 - `TodoPlay.lean` (`todo`): plays events through the to-do list, and prints
   the items left and whether the scene on screen is their view.
 - `TodoWindow.lean` (`todo_window`): the to-do list in a window.
+- `TodoLong.lean` (`todo_long`): the to-do list with 10,000 items.
 
 ## Building
 
@@ -78,6 +88,7 @@ module does.
 lake build                                   # checks every law
 lake build todo && .lake/build/bin/todo      # plays events through the to-do list
 lake build todo_window && .lake/build/bin/todo_window   # the to-do list in a window
+lake build todo_long && .lake/build/bin/todo_long       # with 10,000 items
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version
@@ -95,13 +106,20 @@ libraries to run:
   (`libthorvg-1.so.1`, and `thorvg-1/thorvg_capi.h`): meson's
   `-Dengines=wg -Dloaders=ttf -Dbindings=capi`.
 
+The window's size is fixed: the view shows what fits its height, which it
+takes at launch.
+
 It looks for Liberation Sans at
 `/usr/share/fonts/liberation/LiberationSans-Regular.ttf`; without it, labels
 are left out, and it says why.
 
 Tested with Lean 4.34.0, SDL 3.4.20, wgpu-native 29.0.1.1 and ThorVG 1.1.4,
 on Mesa's software Vulkan driver, under Xvfb (driven by xdotool) and
-headless Weston at scale 2, where it draws the same pixels as bend-deui.
+headless Weston at scale 2, where it drew the same pixels as bend-deui
+before the list scrolled. Only the rows that show are drawn, so the list's
+length doesn't cost anything per frame: on Mesa's software Vulkan, a
+keystroke costs about 23 ms of CPU with 10,000 items and ten rows showing,
+and 15 ms with two items, all of it drawing.
 
 The approach follows Phil Freeman's
 [Purview](https://github.com/paf31/purescript-purview) and

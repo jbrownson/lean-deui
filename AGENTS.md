@@ -17,6 +17,10 @@ Read `README.md` first for what the repository is.
 - **Names:** prefer descriptive structure to terse names, and don't
   replace spelled-out terms with new abbreviations without asking.
 - **Comments don't document Lean itself.**
+- **No caches outside the proofs.** Anything kept to save work is a
+  `Cached` result in Lean, with a law that keeps it in sync; the native
+  side keeps only what the scene's edits say, applied as `SceneEdit.apply`
+  does.
 
 ## Changes
 

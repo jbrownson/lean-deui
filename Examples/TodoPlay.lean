@@ -14,7 +14,7 @@ def events : List App.Event :=
 def main : IO Unit := do
   let m := App.play app (App.start app items) events
   IO.println "done? item:"
-  for it in m.state do
+  for it in m.state.rows do
     IO.println s!"{if it.done then "yes" else "no"} {it.text}"
   let same := m.scene == (view.f m.state).1
   IO.println s!"the scene on screen is the view of the items: {if same then "yes" else "no"}"

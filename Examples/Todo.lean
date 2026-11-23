@@ -1,11 +1,14 @@
 import Deui
 
 /-!
-A to-do list. Click an item's box to tick it and its x to delete it; Return
-starts a new item at the top, typing writes into it, and Backspace takes a
-letter back. Its view is an item's row mapped over the list (`map.inc`),
-then the column, each `cached` and joined by `compose`, so its derivative's
-law follows from theirs (`viewOk`).
+A to-do list, as long as it gets, in a window that shows what fits. Click
+an item's box to tick it and its x to delete it; Return starts a new item
+at the top, typing writes into it, Backspace takes a letter back, and the
+wheel scrolls. Its state is the list held scrolled (`Scroll`); its view is
+what shows in a window `height` tall (`Scrolled.view.inc`), drawn as rows
+on the screen (`Drawing.inc`), each `cached` and joined by `compose`, so its
+derivative's law follows from theirs (`viewOk`). Only the rows that show
+are in the scene.
 -/
 
 namespace Examples.Todo
@@ -16,9 +19,14 @@ structure Item where
   text : String
   done : Bool
 
-/-- An item changes by being replaced; the items change as a list does. -/
+/-- An item changes by being replaced; the items change as a list does,
+or scroll. Each item's row is 40 pixels tall. -/
 abbrev itemEdits : EditStructure := whole (none Item)
-abbrev itemsEdits : EditStructure := Lists.editStructure itemEdits
+def rowHeight (_ : Item) : Nat := 40
+abbrev itemsEdits : EditStructure := Lists.Scrolled.Scroll.editStructure itemEdits rowHeight
+
+/-- The window's height, in pixels. -/
+def height : Int := 400
 
 def boxColor : Bool → UInt32
   | true => 5294180
@@ -35,53 +43,59 @@ def rowOf (item : Item) : Column.Row :=
     .label 334 9 18 14706771 "x",
     .target 320 0 40 38 2]⟩
 
-/-- An item's row, for items that change only by being replaced: none of
-their own edits, so its derivative is never asked. -/
-def rowPlain : Inc (none Item) (none Column.Row) := ⟨rowOf, fun _ e => nomatch e⟩
-
-def row : Inc itemEdits Column.rowEdits := whole.lift rowPlain
-
-/-- The items' rows, then the column of them, each keeping its input for
-its derivative. -/
+/-- What shows of the items, then those rows on the screen, each keeping
+its input for its derivative. -/
 def view : Cached (runs itemsEdits) (runs sceneEdits) :=
-  compose (cached (Lists.map.inc row)) (cached Column.inc)
+  compose (cached (Lists.Scrolled.view.inc itemEdits rowHeight height))
+    (cached (Drawing.inc fun it => (rowOf it).s))
 
 /-- The view's derivative is correct: each part's is, by its law. -/
 theorem viewOk : view.ok :=
   compose_ok _ _
-    (cached_ok _ (Lists.map_inc_ok _ (whole_lift_ok _ fun _ e => nomatch e)))
-    (cached_ok _ Column.inc_ok)
+    (cached_ok _ (Lists.Scrolled.view_inc_ok itemEdits rowHeight height))
+    (cached_ok _ (Drawing.inc_ok _))
 
 /-! ## Handlers -/
 
-/-- A press on a row's box ticks it, on its x deletes it: the row's position
-is the first step of the path to the target. -/
-def press (items : List Item) : Hit → List (Lists.Edit.of itemEdits)
-  | ⟨i :: _, 1⟩ =>
-    match items[i]? with
-    | some it => [.update i (.replace ⟨it.text, !it.done⟩)]
+abbrev Items := Lists.Scrolled.Scroll Item
+abbrev Edits := List (Lists.Scrolled.Scroll.Edit itemEdits)
+
+/-- The position in the list of the row `k`-th from the top of what shows. -/
+def position (z : Items) (k : Nat) : Nat :=
+  (Lists.Scrolled.Scroll.normalize rowHeight z).above.length + k
+
+/-- A press on a row's box ticks it, on its x deletes it: the row's place
+among what shows is the first step of the path to the target. -/
+def press (z : Items) : Hit → Edits
+  | ⟨k :: _, 1⟩ =>
+    let i := position z k
+    match z.rows[i]? with
+    | some it => [.list (.update i (.replace ⟨it.text, !it.done⟩))]
     | .none => []
-  | ⟨i :: _, 2⟩ => [.delete i]
+  | ⟨k :: _, 2⟩ => [.list (.delete (position z k))]
   | _ => []
 
 /-- The first item, rewritten by `f`. -/
-def first (items : List Item) (f : String → String) : List (Lists.Edit.of itemEdits) :=
-  match items with
-  | it :: _ => [.update 0 (.replace ⟨f it.text, it.done⟩)]
+def first (z : Items) (f : String → String) : Edits :=
+  match z.rows with
+  | it :: _ => [.list (.update 0 (.replace ⟨f it.text, it.done⟩))]
   | [] => []
 
 /-- Return starts a new item at the top; Backspace takes a letter from it. -/
-def key (items : List Item) : UInt32 → List (Lists.Edit.of itemEdits)
-  | 13 => [.insert 0 ⟨"", false⟩]
-  | 127 => first items fun t => t.dropEnd 1 |>.toString
+def key (z : Items) : UInt32 → Edits
+  | 13 => [.list (.insert 0 ⟨"", false⟩)]
+  | 127 => first z fun t => t.dropEnd 1 |>.toString
   | _ => []
 
 /-- Typing writes into the first item. -/
-def text (items : List Item) (t : String) : List (Lists.Edit.of itemEdits) :=
-  first items (· ++ t)
+def text (z : Items) (t : String) : Edits := first z (· ++ t)
 
-def app : App.App itemsEdits := ⟨view, press, key, text⟩
+/-- The wheel scrolls a row's height a notch: toward the top scrolls up. -/
+def scroll (_ : Items) (dy : Float) : Edits :=
+  [.scroll (-(dy * 40).toInt64.toInt)]
 
-def items : List Item := [⟨"Buy milk", false⟩, ⟨"Write laws", false⟩]
+def app : App.App itemsEdits := ⟨view, press, key, text, scroll⟩
+
+def items : Items := ⟨[], [⟨"Buy milk", false⟩, ⟨"Write laws", false⟩], 0⟩
 
 end Examples.Todo

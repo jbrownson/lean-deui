@@ -30,3 +30,9 @@ lean_exe todo_window where
   root := `Examples.TodoWindow
   moreLinkObjs := #[libscreen]
   moreLinkArgs := #["-ldl"]
+
+/-- The to-do list with 10,000 items, in a window. -/
+lean_exe todo_long where
+  root := `Examples.TodoLong
+  moreLinkObjs := #[libscreen]
+  moreLinkArgs := #["-ldl"]

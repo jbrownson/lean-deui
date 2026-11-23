@@ -318,7 +318,7 @@ lean_obj_res deui_window_open(b_lean_obj_arg title, uint32_t width, uint32_t hei
     return ds_sdl_fail("SDL_Init");
   }
   ds.window = ds_SDL_CreateWindow(lean_string_cstr(title), (int)width, (int)height,
-    SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_WINDOW_HIGH_PIXEL_DENSITY);
   if (ds.window == NULL) {
     return ds_sdl_fail("SDL_CreateWindow");
   }
