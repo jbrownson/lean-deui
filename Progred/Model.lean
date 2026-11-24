@@ -3,18 +3,13 @@ import Deui.Lists
 
 /-!
 The editor's state: the document, the selection, folds, what evaluations
-gave, and undo. A write records where the document was, so undo is the
-whole state before it. Navigation goes by what's drawn: the occurrences of
-the layout, part by part, in reading order.
+gave, and undo. Every change has one that takes it back, worked out from
+the model before it's made; a write keeps those, and undo makes them, so
+it costs what it undoes. Navigation goes by what's drawn: the occurrences
+of the layout, part by part, in reading order.
 -/
 
 namespace Progred
-
-/-- The state an undo goes back to. -/
-structure Snapshot where
-  doc : Document
-  selection : Option Path
-  folds : List (Path × Bool)
 
 /-- A change to what the view reads of the editor's state. Each says what
 changed, so what's drawn can ask whether it matters to it: a cell's
@@ -52,8 +47,10 @@ structure Model where
   parts compare it at once. -/
   layouts : Shared (List (Value × Value × Value)) := ⟨[]⟩
   stale : Bool := true
-  undo : List Snapshot := []
-  redo : List Snapshot := []
+  /-- What takes back each step that was made, latest first: its changes,
+  in the order to make them. And what makes again each step taken back. -/
+  undo : List (List Change) := []
+  redo : List (List Change) := []
   /-- Whether the last write was typing in a line, which the next
   keystroke's write joins rather than adding an undo step. -/
   typingRun : Bool := false
@@ -121,8 +118,6 @@ def seen (m : Model) : Display.Seen :=
       else []
     | none => []
   { selection, folds := m.folds, results := m.results, layouts := m.layouts, named, ribbon := m.ribbon }
-
-def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩
 
 /-! ## Changes
 
@@ -237,20 +232,80 @@ def written (old new : Document) (at_ : Option Path) : List Change :=
       else [.root new.root]
     | _, _, _ => [.root new.root]
 
+/-- The change that takes a change back, from the model it's about to be
+made to. A change within the root is taken back by a change within it,
+where that gives the root as it was, which is looked at; and where it
+doesn't, by the root as it was. -/
+def back (m : Model) (c : Change) : Change :=
+  -- A change within the root, if it gives the root back; else the root.
+  let rooted (fine : Change) : Change :=
+    if equal (fine.apply (c.apply m)).doc.root m.doc.root then fine else .root m.doc.root
+  let entry (i : Nat) : Option (Position × Value) := (Display.notebookEntries? m.doc.root).bind (·[i]?)
+  match c with
+  | .cell k _ => .cell k m.doc.cells[k]?
+  | .entry i _ =>
+    match entry i with
+    | some (_, v) => rooted (.entry i v)
+    | none => .root m.doc.root
+  | .entryAt i rel _ =>
+    match entry i with
+    | some (_, v) => rooted (.entryAt i rel (v.at? rel))
+    | none => .root m.doc.root
+  | .entryIn i _ _ => rooted (.entryOut (min i ((Display.notebookEntries? m.doc.root).getD []).length))
+  | .entryOut i =>
+    match entry i with
+    | some (p, v) => rooted (.entryIn i p v)
+    | none => .root m.doc.root
+  | .root _ => .root m.doc.root
+  | .rootAt rel _ => rooted (.rootAt rel (m.doc.root.bind (·.at? rel)))
+  | .document _ => .document m.doc
+  | .select _ => .select m.selection
+  | .folds _ => .folds m.folds
+  | .results _ => .results m.results
+  | .layouts _ => .layouts m.layouts
+  | .scroll _ => .scroll m.scroll
+  | .size _ _ => .size m.width m.height
+
+/-- Changes made one after another, with what takes them back, the latest
+first. -/
+def changing (m : Model) (changes : List Change) : Model × List Change :=
+  changes.foldl (fun (made : Model × List Change) c => (made.1.change c, made.1.back c :: made.2)) (m, [])
+
+/-- Whether two changes are at the one place, so that the second made after
+the first leaves nothing of the first. -/
+def _root_.Progred.Change.sameSpot : Change → Change → Bool
+  | .cell a _, .cell b _ => a == b
+  | .entry i _, .entry j _ => i == j
+  | .entryAt i r _, .entryAt j q _ => i == j && r == q
+  | .rootAt r _, .rootAt q _ => r == q
+  | .root _, .root _ => true
+  | _, _ => false
+
 /-- The model with a new document: an undo step, unless it joins a run of
 typing. `at_` is the path the document was written at, and `also` are cells
-written besides. -/
+written besides. The step is what takes the write back, then the selection
+and the folds as they were. A run of typing is one step: what takes back
+its first keystroke takes back the rest, written at the same place. -/
 def write (m : Model) (doc : Document) (typing : Bool := false) (at_ : Option Path := none)
     (also : List CellId := []) : Model :=
   let changes := (also.map fun c => Change.cell c doc.cells[c]?) ++ written m.doc doc at_
-  let m' := changes.foldl change m
-  { m' with
-    redo := [], stale := true, dirty := true, typingRun := typing,
-    undo := if typing && m.typingRun then m.undo else m.snapshot :: m.undo }
+  let made := m.changing changes
+  let undo :=
+    match typing && m.typingRun, m.undo with
+    | true, step :: rest =>
+      (made.2.filter (fun b => !(step.head?.map b.sameSpot).getD false) ++ step) :: rest
+    | _, steps =>
+      (made.2 ++ [.select (m.selection.map fun sel => { path := sel.path }), .folds m.folds]) :: steps
+  { made.1 with redo := [], stale := true, dirty := true, typingRun := typing, undo }
 
-def restore (m : Model) (s : Snapshot) : Model :=
-  { ((m.change (.document s.doc)).change (.select (s.selection.map ({ path := · })))).change (.folds s.folds) with
-    stale := true, dirty := true, typingRun := false }
+/-- A step taken back, or made again: its changes made, and the step that
+does the opposite, which rests the selection where it was. -/
+def stepped (m : Model) (step : List Change) : Model × List Change :=
+  let made := m.changing step
+  ({ made.1 with stale := true, dirty := true, typingRun := false },
+    made.2.map fun
+      | .select sel => .select (sel.map fun s => { path := s.path })
+      | c => c)
 
 /-- Writing one cell's definition leaves every other cell's as it was. -/
 theorem defined_other (cells : Std.TreeMap CellId Value) (c : CellId) (v : Option Value) (x : CellId)
@@ -277,13 +332,86 @@ def Edit.cells? : Edit → List CellsEdit
 
 def undone (m : Model) : Model :=
   match m.undo with
-  | s :: rest => { m.restore s with undo := rest, redo := m.snapshot :: m.redo }
+  | step :: rest =>
+    let made := m.stepped step
+    { made.1 with undo := rest, redo := made.2 :: m.redo }
   | [] => m
 
 def redone (m : Model) : Model :=
   match m.redo with
-  | s :: rest => { m.restore s with redo := rest, undo := m.snapshot :: m.undo }
+  | step :: rest =>
+    let made := m.stepped step
+    { made.1 with redo := rest, undo := made.2 :: m.undo }
   | [] => m
+
+/-- Taking a change back gives the root, the selection and the folds as
+they were. -/
+theorem back_ok (m : Model) (c : Change) :
+    ((m.back c).apply (c.apply m)).doc.root = m.doc.root ∧
+      ((m.back c).apply (c.apply m)).selection = m.selection ∧
+      ((m.back c).apply (c.apply m)).folds = m.folds := by
+  have rooted : ∀ fine : Change,
+      ((if equal (fine.apply (c.apply m)).doc.root m.doc.root then fine else Change.root m.doc.root).apply
+        (c.apply m)).doc.root = m.doc.root := by
+    intro fine
+    split
+    · next h => exact equal_sound _ _ h
+    · rfl
+  cases c with
+  | cell k v => exact ⟨rfl, rfl, rfl⟩
+  | entry i v =>
+    simp only [back]
+    split
+    · exact ⟨rooted _, by split <;> rfl, by split <;> rfl⟩
+    · exact ⟨rfl, rfl, rfl⟩
+  | entryAt i rel w =>
+    simp only [back]
+    split
+    · exact ⟨rooted _, by split <;> rfl, by split <;> rfl⟩
+    · exact ⟨rfl, rfl, rfl⟩
+  | entryIn i p v =>
+    simp only [back]
+    exact ⟨rooted _, by split <;> rfl, by split <;> rfl⟩
+  | entryOut i =>
+    simp only [back]
+    split
+    · exact ⟨rooted _, by split <;> rfl, by split <;> rfl⟩
+    · exact ⟨rfl, rfl, rfl⟩
+  | root r => exact ⟨rfl, rfl, rfl⟩
+  | rootAt rel w =>
+    simp only [back]
+    exact ⟨rooted _, by split <;> rfl, by split <;> rfl⟩
+  | document d => exact ⟨rfl, rfl, rfl⟩
+  | select sel => exact ⟨rfl, rfl, rfl⟩
+  | folds fs => exact ⟨rfl, rfl, rfl⟩
+  | results rs => exact ⟨rfl, rfl, rfl⟩
+  | layouts ls => exact ⟨rfl, rfl, rfl⟩
+  | scroll n => exact ⟨rfl, rfl, rfl⟩
+  | size w h => exact ⟨rfl, rfl, rfl⟩
+
+/-- And every cell's definition as it was. -/
+theorem back_cells (m : Model) (c : Change) (x : CellId) :
+    ((m.back c).apply (c.apply m)).doc.cells[x]? = m.doc.cells[x]? := by
+  cases c with
+  | cell k v =>
+    show (defined (defined m.doc.cells k v) k m.doc.cells[k]?)[x]? = m.doc.cells[x]?
+    by_cases h : x = k
+    · subst h
+      cases m.doc.cells[x]? <;> simp [defined]
+    · rw [defined_other _ _ _ _ h, defined_other _ _ _ _ h]
+  | entry i v => simp only [back]; repeat (first | rfl | split)
+  | entryAt i rel w => simp only [back]; repeat (first | rfl | split)
+  | entryIn i p v => simp only [back]; repeat (first | rfl | split)
+  | entryOut i => simp only [back]; repeat (first | rfl | split)
+  | rootAt rel w => simp only [back]; repeat (first | rfl | split)
+  | root r => rfl
+  | document d => rfl
+  | select sel => rfl
+  | folds fs => rfl
+  | results rs => rfl
+  | layouts ls => rfl
+  | scroll n => rfl
+  | size w h => rfl
 
 /-- A fresh cell id, and the model without it. -/
 def fresh (m : Model) : CellId × Model :=

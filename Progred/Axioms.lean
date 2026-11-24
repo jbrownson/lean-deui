@@ -44,3 +44,9 @@ or a new axiom. -/
 
 /-- info: 'Progred.Editor.drawn_df_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Editor.drawn_df_ok
+
+/-- info: 'Progred.Model.back_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Model.back_ok
+
+/-- info: 'Progred.Model.back_cells' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Model.back_cells

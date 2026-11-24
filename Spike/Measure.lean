@@ -102,6 +102,7 @@ def main (args : List String) : IO Unit := do
       if args.contains "line" then
         let _ ← timed "typing in a line, 600 times" m ((List.replicate 300 (App.Event.text "x")) ++ List.replicate 300 (key 127))
         return
+      let m ← timed "undo, and redo" m ((List.range 10).flatMap fun _ => [.key 'z'.toNat.toUInt32 true 2, .key 'z'.toNat.toUInt32 true 3])
       let m ← if path.toNat?.isSome then do
           let m ← timedEdits "a definition a tenth of the entries reach, written" m
             ((List.range 20).map fun j => [Model.Edit.change (.cell shared[3]! (some (sharedValue 3 (j + 1))))])
