@@ -73,8 +73,10 @@ module does.
   is laid out as text, and kept as it's laid: each frame with where it
   started and each kid as it was laid there. When a frame is replaced,
   only the frames above it are walked again, each taking its other kids as
-  they stand, and what comes out is a splice where that frame's tokens
-  are; where a frame above now fits differently, a splice of that frame's.
+  they stand. A frame can also be reshaped: given a new doc, and kids that
+  are each one it had or a new one. What comes out is a splice of the
+  text between what a frame's walk has in common with what was kept, at
+  the front and at the end.
   `fit_ok` says the splices take the text to the edited tree's, and that
   what's kept is what laying that out from nothing keeps.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
@@ -139,10 +141,11 @@ version does, what this one decides, and what isn't here yet.
 - `Writes.lean`, `Regrow.lean`: what a change does to a part's frames. A
   write within a value, and a selection that changes, are each followed
   down to where they land; a frame on the way that sees what it saw is
-  left as it is, and one that sees something new is grown again
-  (`rewrite_ok`, `reselect_ok`).
+  left as it is, and one that sees something new is drawn again with the
+  kids it had (`rewrite_ok`, `reselect_ok`).
 - `Model.lean`, `Editing.lean`: the editor: selection, navigation by what's
-  drawn, holes answered by offers as you type, lines typed in place, undo.
+  drawn, holes answered by offers as you type, lines typed in place, and
+  undo, which is the changes that take a step back (`back_ok`).
 - `Skinny.lean`, `Prelude.lean`, `Run.lean`: the language, Skinny. An
   expression becomes Lean `Syntax`, built with quotations, never text, and
   is elaborated and run by Lean at run time, in an environment loaded
@@ -176,11 +179,12 @@ long as its amount.
 
 On a notebook of 3,300 lines in 300 entries (`progred_measure 300`): the
 wheel takes about 25 µs, an arrow key 50 µs, a keystroke of typing 0.2 to
-0.35 ms, and writing a definition that a tenth of the entries reach 4 ms,
-against 20 ms to lay the document out from nothing. On the same entries as
-one part, a list at the root (`progred_measure 300 one`): an arrow key
-50 µs and a keystroke 0.5 to 0.65 ms; before a part's layout had a
-derivative, each took a third of a second.
+0.35 ms, an element added or taken away or an undo up to 0.6 ms, and
+writing a definition that a tenth of the entries reach 4 ms, against 20 ms
+to lay the document out from nothing. On the same entries as one part, a
+list at the root (`progred_measure 300 one`): an arrow key 50 µs and a
+keystroke 0.5 to 0.6 ms; before a part's layout had a derivative, each
+took a third of a second.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).

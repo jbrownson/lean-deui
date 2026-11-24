@@ -214,14 +214,28 @@ end
 
 /-! ## Edits -/
 
-/-- An edit of a frame tree: a frame replaced, at a path of kids. -/
+/-- Where a kid of a reshaped frame comes from: a kid the frame had, by
+where it was, or a new frame. -/
+inductive Source (S : Type) where
+  | kept (j : Nat)
+  | fresh (f : Frame S)
+
+/-- The frame a source is, among the kids a frame had. -/
+def Source.frame (olds : List (Frame S)) : Source S → Frame S
+  | .kept j => (olds[j]?).getD (.node (.row []) [])
+  | .fresh f => f
+
+/-- An edit of a frame tree, at a path of kids: a frame replaced; or
+reshaped, with a new doc and its kids each one it had or a new one. -/
 inductive Edit (S : Type) where
   | replace (f : Frame S)
   | kid (i : Nat) (e : Edit S)
+  | reshape (doc : Doc S) (kids : List (Source S))
 
 def Edit.apply : Edit S → Frame S → Frame S
   | .replace f, _ => f
   | .kid i e, .node doc kids => .node doc (kids.modify i (Edit.apply e))
+  | .reshape doc sources, .node _ kids => .node doc (sources.map (Source.frame kids))
 
 abbrev edits (S : Type) : EditStructure := ⟨Frame S, Edit S, Edit.apply⟩
 
@@ -507,21 +521,29 @@ end
 /-! ## Laying out again -/
 
 /-- A kept item made ready for its frame to be walked again: a token as it
-is, or a kid, with what it's laid as now and the splices that take its
-tokens there. -/
+is, or a kid, by where it was among the kids, with what it's laid as now
+and the splices that take its tokens there. -/
 inductive Ready (S : Type) where
   | token (t : Token S)
-  | kid (i : Nat) (old new : Kept S) (splices : List (Splice S))
+  | kid (j : Nat) (old new : Kept S) (splices : List (Splice S))
 
-/-- A kid for a walk, from what was kept: the next kid kept, if it's this
-one and stood where this is to stand; else laid out from nothing. -/
-def reuse (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) (i first col : Nat) :
-    List (Ready S) → Option (Kept S) × List (Ready S)
-  | [] => ((kids[i]?).map fun k => Frame.lay m ribbon k first col, [])
-  | .token _ :: rest => reuse m ribbon kids i first col rest
-  | .kid j old new _ :: rest =>
-    if j = i ∧ old.first = first ∧ old.col = col then (some new, rest)
-    else ((kids[i]?).map fun k => Frame.lay m ribbon k first col, rest)
+/-- The first kid that was at `j` among ready items, if it stood where a
+kid is now to stand: what it's laid as now, and the items after it. -/
+def find (j first col : Nat) : List (Ready S) → Option (Kept S × List (Ready S))
+  | [] => none
+  | .token _ :: rest => find j first col rest
+  | .kid j' old new _ :: rest =>
+    if j' = j then (if old.first = first ∧ old.col = col then some (new, rest) else none)
+    else find j first col rest
+
+/-- A kid for a walk, from what was kept: if the kid was one the frame had
+(`origin` says where), and it stood where this is to stand, as it's laid
+now; else laid out from nothing. -/
+def reuse (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) (origin : Nat → Option Nat)
+    (i first col : Nat) (ready : List (Ready S)) : Option (Kept S) × List (Ready S) :=
+  match (origin i).bind fun j => find j first col ready with
+  | some found => (some found.1, found.2)
+  | none => ((kids[i]?).map fun fr => Frame.lay m ribbon fr first col, ready)
 
 /-- Whether two tokens are the same: at once if their cells are the one
 object, as a doc's own are from one walk to the next. -/
@@ -533,20 +555,67 @@ def sameToken [DecidableEq S] : Token S → Token S → Bool
 theorem sameToken_sound [DecidableEq S] (a b : Token S) (h : sameToken a b = true) : a = b := by
   cases a <;> cases b <;> simp_all [sameToken, withPtrEq]
 
-/-- Whether a walk came out as what was kept, kid for kid and token for
-token: then nothing of the frame's own has changed. -/
-def alike [DecidableEq S] : List (Ready S) → List (Item S) → Bool
-  | [], [] => true
-  | .token t :: rs, .token t' :: is => sameToken t t' && alike rs is
-  | .kid j _ new _ :: rs, .kid j' k :: is =>
-    j == j' && new.first == k.first && new.col == k.col && alike rs is
+/-- Whether an item of a walk is what a ready item is now: the same token,
+or the kid it was, standing where it stood. -/
+def alike [DecidableEq S] (origin : Nat → Option Nat) : Ready S → Item S → Bool
+  | .token t, .token t' => sameToken t t'
+  | .kid j _ new _, .kid i k => origin i == some j && new.first == k.first && new.col == k.col
   | _, _ => false
+
+/-- The items a walk has in common with what was kept, from the front, and
+what's left of each. -/
+def strip [DecidableEq S] (origin : Nat → Option Nat) :
+    List (Ready S) → List (Item S) → (List (Ready S) × List (Item S)) × (List (Ready S) × List (Item S))
+  | r :: rs, it :: is =>
+    if alike origin r it then
+      let rest := strip origin rs is
+      ((r :: rest.1.1, it :: rest.1.2), rest.2)
+    else (([], []), (r :: rs, it :: is))
+  | rs, is => (([], []), (rs, is))
+
+def Ready.old1 : Ready S → List (Token S)
+  | .token t => [t]
+  | .kid _ old _ _ => old.tokens
+
+def Ready.new1 : Ready S → List (Token S)
+  | .token t => [t]
+  | .kid _ _ new _ => new.tokens
+
+def Item.tokens1 : Item S → List (Token S)
+  | .token t => [t]
+  | .kid _ k => k.tokens
+
+/-- The tokens ready items had, and have now. -/
+def olds (rs : List (Ready S)) : List (Token S) := rs.flatMap Ready.old1
+
+def news (rs : List (Ready S)) : List (Token S) := rs.flatMap Ready.new1
+
+/-- The size ready items had. -/
+def oldExtents : List (Ready S) → Extent
+  | [] => Extent.zero
+  | .token t :: rs => (Item.token t).extent + oldExtents rs
+  | .kid _ old _ _ :: rs => old.extent + oldExtents rs
 
 /-- The kids' splices, each moved past what's before its kid, from `off`. -/
 def fine : Extent → List (Ready S) → List (Splice S)
   | _, [] => []
   | off, .token t :: rs => fine (off + (Item.token t).extent) rs
   | off, .kid _ _ new sp :: rs => sp.map (Splice.shift off) ++ fine (off + new.extent) rs
+
+/-- The splices that take a frame's tokens to a walk's. What the walk has
+in common with what was kept, from the front and from the end, is left,
+but for the splices of a kid within it; what's between is taken out, and
+the walk's put in. -/
+def mend [DecidableEq S] (origin : Nat → Option Nat) (ready : List (Ready S)) (items : List (Item S)) :
+    List (Splice S) :=
+  let front := strip origin ready items
+  let back := strip origin front.2.1.reverse front.2.2.reverse
+  let between := back.2.1.reverse
+  let put := back.2.2.reverse
+  fine Extent.zero front.1.1 ++
+    (if between.isEmpty && put.isEmpty then []
+      else [⟨extents front.1.2, oldExtents between, tokensOf put⟩]) ++
+    fine (extents front.1.2 + extents put) back.1.1.reverse
 
 /-- A kept item made ready: a kid at `i` laid again by `relay`, any other
 as it stands. -/
@@ -558,122 +627,324 @@ def readied [DecidableEq S] (relay : Kept S → List (Splice S) × Kept S) (i : 
       .kid j k made.2 made.1
     else .kid j k k []
 
+/-- A kept item made ready, as it stands. -/
+def Item.ready : Item S → Ready S
+  | .token t => .token t
+  | .kid j k => .kid j k k []
+
+/-- A frame walked again, with its kids as they're kept where they can be:
+what's kept for it, and the splices that take its tokens there. -/
+def rewalk [DecidableEq S] (m : Measure S) (ribbon : Nat) (doc : Doc S) (kids : List (Frame S))
+    (origin : Nat → Option Nat) (first col : Nat) (ready : List (Ready S)) : List (Splice S) × Kept S :=
+  let w := Doc.lay m ribbon (kidFits m.width kids) (reuse m ribbon kids origin) doc col first ready
+  (mend origin ready w.items, .node (.node doc kids) first col w.items w.stop (extents w.items))
+
+/-- Where the kid at a position of a reshaped frame was, if it was one the
+frame had. -/
+def Source.origin (sources : Array (Source S)) (had : Nat) (i : Nat) : Option Nat :=
+  match sources[i]? with
+  | some (.kept j) => if j < had then some j else none
+  | _ => none
+
 /-- A kept frame after an edit, and the splices that take its tokens
-there. A frame replaced is laid out from nothing, where it stood. Above
-it, each frame is walked again with its kids as they're kept; if it comes
-out as it was but for the kid that changed, the kid's splices are all, and
-otherwise its tokens are replaced whole. -/
+there. A frame replaced is laid out from nothing, where it stood. A frame
+above it, or one reshaped, is walked again with its kids as they're kept;
+what comes out as it was is left, and what doesn't is spliced. -/
 def Kept.relay [DecidableEq S] (m : Measure S) (ribbon : Nat) : Edit S → Kept S → List (Splice S) × Kept S
   | .replace f, k =>
     let made := Frame.lay m ribbon f k.first k.col
     ([⟨Extent.zero, k.extent, made.tokens⟩], made)
-  | .kid i e, .node (.node doc kids) first col items _ ext =>
-    let ready := items.map (readied (Kept.relay m ribbon e) i)
-    let kids' := kids.modify i (Edit.apply e)
-    let w := Doc.lay m ribbon (kidFits m.width kids') (reuse m ribbon kids') doc col first ready
-    let kept := Kept.node (.node doc kids') first col w.items w.stop (extents w.items)
-    if alike ready w.items then (fine Extent.zero ready, kept)
-    else ([⟨Extent.zero, ext, tokensOf w.items⟩], kept)
+  | .kid i e, .node (.node doc kids) first col items _ _ =>
+    rewalk m ribbon doc (kids.modify i (Edit.apply e)) some first col
+      (items.map (readied (Kept.relay m ribbon e) i))
+  | .reshape doc sources, .node (.node _ kids) first col items _ _ =>
+    rewalk m ribbon doc (sources.map (Source.frame kids)) (Source.origin sources.toArray kids.length) first col
+      (items.map Item.ready)
 
-/-- A ready item is sound for the kids as they are now: its kid, as it's
-laid now, is that kid laid out from nothing where it stood, and its
-splices take the old tokens to the new. -/
-def Ready.Sound (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) : Ready S → Prop
+/-- A ready item is sound: its kid, as it's laid now, is the frame that
+kid is now (`was` says, by where the kid was) laid out from nothing where
+it stood, and its splices take the old tokens to the new. -/
+def Ready.Sound (m : Measure S) (ribbon : Nat) (was : Nat → Option (Frame S)) : Ready S → Prop
   | .token _ => True
   | .kid j old new sp =>
-    ∃ fr, kids[j]? = some fr ∧ new = Frame.lay m ribbon fr old.first old.col ∧ Takes sp old.tokens new.tokens
+    ∃ fr, was j = some fr ∧ new = Frame.lay m ribbon fr old.first old.col ∧ Takes sp old.tokens new.tokens ∧
+      old.extent = Text.extent old.tokens
+
+theorem find_ok (m : Measure S) (ribbon : Nat) (was : Nat → Option (Frame S)) (j first col : Nat) :
+    ∀ (ready : List (Ready S)) (k : Kept S) (rest : List (Ready S)), (∀ r ∈ ready, r.Sound m ribbon was) →
+      find j first col ready = some (k, rest) →
+      (∃ fr, was j = some fr ∧ k = Frame.lay m ribbon fr first col) ∧ ∀ r ∈ rest, r.Sound m ribbon was
+  | [], _, _, _, h => by simp [find] at h
+  | .token _ :: more, k, rest, hs, h => by
+    simp only [find] at h
+    exact find_ok m ribbon was j first col more k rest (fun r hr => hs r (List.mem_cons_of_mem _ hr)) h
+  | .kid j' old new sp :: more, k, rest, hs, h => by
+    simp only [find] at h
+    split at h
+    · next hj =>
+      subst hj
+      split at h
+      · next hc =>
+        obtain ⟨rfl, rfl⟩ := hc
+        simp only [Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨fr, hfr, hnew, _⟩ := hs (.kid j' old new sp) (List.mem_cons_self ..)
+        exact ⟨⟨fr, hfr, hnew⟩, fun r hr => hs r (List.mem_cons_of_mem _ hr)⟩
+      · cases h
+    · exact find_ok m ribbon was j first col more k rest (fun r hr => hs r (List.mem_cons_of_mem _ hr)) h
 
 /-- Reusing what's kept gives what laying out from nothing gives. -/
-theorem reuse_ok (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) (i first col : Nat) :
-    ∀ (s : List (Ready S)), (∀ r ∈ s, r.Sound m ribbon kids) →
-      (reuse m ribbon kids i first col s).1 = (kidLay m ribbon kids i first col ()).1 ∧
-        ∀ r ∈ (reuse m ribbon kids i first col s).2, r.Sound m ribbon kids
-  | [], _ => ⟨rfl, by simp [reuse]⟩
-  | .token _ :: rest, hs => by
-    simp only [reuse]
-    exact reuse_ok m ribbon kids i first col rest fun r hr => hs r (List.mem_cons_of_mem _ hr)
-  | .kid j old new sp :: rest, hs => by
-    simp only [reuse]
+theorem reuse_ok (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) (origin : Nat → Option Nat)
+    (was : Nat → Option (Frame S)) (horigin : ∀ i j, origin i = some j → kids[i]? = was j) (i first col : Nat)
+    (ready : List (Ready S)) (hs : ∀ r ∈ ready, r.Sound m ribbon was) :
+    (reuse m ribbon kids origin i first col ready).1 = (kidLay m ribbon kids i first col ()).1 ∧
+      ∀ r ∈ (reuse m ribbon kids origin i first col ready).2, r.Sound m ribbon was := by
+  unfold reuse
+  cases ho : origin i with
+  | none => exact ⟨rfl, hs⟩
+  | some j =>
+    simp only [Option.bind_some]
+    cases hf : find j first col ready with
+    | none => exact ⟨rfl, hs⟩
+    | some found =>
+      obtain ⟨k, rest⟩ := found
+      obtain ⟨⟨fr, hfr, hk⟩, hrest⟩ := find_ok m ribbon was j first col ready k rest hs hf
+      refine ⟨?_, hrest⟩
+      simp [kidLay, horigin i j ho, hfr, hk]
+
+theorem tokensOf_flatMap (is : List (Item S)) : tokensOf is = is.flatMap Item.tokens1 := by
+  induction is with
+  | nil => simp [tokensOf_nil]
+  | cons it is ih =>
+    cases it with
+    | token t => simp [tokensOf_token, Item.tokens1, ih]
+    | kid i k => simp [tokensOf_kid, Item.tokens1, ih]
+
+/-- An item of a walk that's alike a sound ready item has its tokens. -/
+theorem alike_tokens [DecidableEq S] (m : Measure S) (ribbon : Nat) (kids : List (Frame S))
+    (origin : Nat → Option Nat) (was : Nat → Option (Frame S))
+    (horigin : ∀ i j, origin i = some j → kids[i]? = was j) (r : Ready S) (it : Item S)
+    (hs : r.Sound m ribbon was)
+    (hk : ∀ i k, it = Item.kid i k → ∃ fr, kids[i]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col)
+    (h : alike origin r it = true) : r.new1 = it.tokens1 := by
+  cases r with
+  | token t =>
+    cases it with
+    | token t' => simp only [alike] at h; simp [Ready.new1, Item.tokens1, sameToken_sound t t' h]
+    | kid i k => simp [alike] at h
+  | kid j old new sp =>
+    cases it with
+    | token t' => simp [alike] at h
+    | kid i k =>
+      simp only [alike, Bool.and_eq_true, beq_iff_eq] at h
+      obtain ⟨⟨ho, hf⟩, hc⟩ := h
+      obtain ⟨fr, hfr, hnew, _⟩ := hs
+      obtain ⟨fr', hfr', hkk⟩ := hk i k rfl
+      have e : fr' = fr := by
+        rw [horigin i j ho, hfr] at hfr'
+        exact (Option.some.inj hfr').symm
+      have : k = new := by rw [hkk, e, ← hf, ← hc, hnew, Frame.lay_first, Frame.lay_col]
+      simp [Ready.new1, Item.tokens1, this]
+
+/-- What `strip` takes off the front is the front of each, and the items
+taken off have the tokens the ready ones have now. -/
+theorem strip_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) (kids : List (Frame S))
+    (origin : Nat → Option Nat) (was : Nat → Option (Frame S))
+    (horigin : ∀ i j, origin i = some j → kids[i]? = was j) :
+    ∀ (rs : List (Ready S)) (is : List (Item S)), (∀ r ∈ rs, r.Sound m ribbon was) →
+      (∀ i k, Item.kid i k ∈ is → ∃ fr, kids[i]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col) →
+      rs = (strip origin rs is).1.1 ++ (strip origin rs is).2.1 ∧
+        is = (strip origin rs is).1.2 ++ (strip origin rs is).2.2 ∧
+        (strip origin rs is).1.1.map Ready.new1 = (strip origin rs is).1.2.map Item.tokens1
+  | [], is, _, _ => by simp [strip]
+  | r :: rs, [], _, _ => by simp [strip]
+  | r :: rs, it :: is, hs, hk => by
+    simp only [strip]
     split
-    · next hc =>
-      obtain ⟨rfl, rfl, rfl⟩ := hc
-      obtain ⟨fr, hfr, hnew, _⟩ := hs (.kid j old new sp) (List.mem_cons_self ..)
-      exact ⟨by simp [kidLay, hfr, hnew], fun r hr => hs r (List.mem_cons_of_mem _ hr)⟩
-    · exact ⟨rfl, fun r hr => hs r (List.mem_cons_of_mem _ hr)⟩
+    · next h =>
+      obtain ⟨h1, h2, h3⟩ := strip_ok m ribbon kids origin was horigin rs is
+        (fun x hx => hs x (List.mem_cons_of_mem _ hx)) (fun i k hm => hk i k (List.mem_cons_of_mem _ hm))
+      have ht := alike_tokens m ribbon kids origin was horigin r it (hs r (List.mem_cons_self ..))
+        (fun i k e => hk i k (e ▸ List.mem_cons_self ..)) h
+      refine ⟨?_, ?_, ?_⟩
+      · simp only [List.cons_append]; rw [← h1]
+      · simp only [List.cons_append]; rw [← h2]
+      · simp only [List.map_cons, ht, h3]
+    · simp
 
-/-- The tokens ready items had, and have now. -/
-def olds : List (Ready S) → List (Token S)
-  | [] => []
-  | .token t :: rs => t :: olds rs
-  | .kid _ old _ _ :: rs => old.tokens ++ olds rs
+theorem oldExtents_ok (m : Measure S) (ribbon : Nat) (was : Nat → Option (Frame S)) :
+    ∀ (rs : List (Ready S)), (∀ r ∈ rs, r.Sound m ribbon was) → oldExtents rs = Text.extent (olds rs)
+  | [], _ => rfl
+  | .token t :: rs, hs => by
+    have ih := oldExtents_ok m ribbon was rs fun r hr => hs r (List.mem_cons_of_mem _ hr)
+    show (Item.token t).extent + oldExtents rs = Text.extent ([t] ++ olds rs)
+    rw [extent_append, ih]
+    cases t <;> rfl
+  | .kid j old new sp :: rs, hs => by
+    have ih := oldExtents_ok m ribbon was rs fun r hr => hs r (List.mem_cons_of_mem _ hr)
+    obtain ⟨_, _, _, _, hext⟩ := hs (.kid j old new sp) (List.mem_cons_self ..)
+    show old.extent + oldExtents rs = Text.extent (old.tokens ++ olds rs)
+    rw [extent_append, ih, hext]
 
-def news : List (Ready S) → List (Token S)
-  | [] => []
-  | .token t :: rs => t :: news rs
-  | .kid _ _ new _ :: rs => new.tokens ++ news rs
-
-theorem alike_news [DecidableEq S] (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) :
-    ∀ (ready : List (Ready S)) (items : List (Item S)), (∀ r ∈ ready, r.Sound m ribbon kids) →
-      (∀ j k, Item.kid j k ∈ items → ∃ fr, kids[j]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col) →
-      alike ready items = true → tokensOf items = news ready
-  | [], [], _, _, _ => by simp [tokensOf_nil, news]
-  | [], _ :: _, _, _, h => by simp [alike] at h
-  | .token t :: rs, [], _, _, h => by simp [alike] at h
-  | .token t :: rs, .kid _ _ :: is, _, _, h => by simp [alike] at h
-  | .kid _ _ _ _ :: rs, [], _, _, h => by simp [alike] at h
-  | .kid _ _ _ _ :: rs, .token _ :: is, _, _, h => by simp [alike] at h
-  | .token t :: rs, .token t' :: is, hs, hk, h => by
-    simp only [alike, Bool.and_eq_true] at h
-    rw [tokensOf_token, news, ← sameToken_sound t t' h.1,
-      alike_news m ribbon kids rs is (fun r hr => hs r (List.mem_cons_of_mem _ hr))
-        (fun j k hm => hk j k (List.mem_cons_of_mem _ hm)) h.2]
-  | .kid j old new sp :: rs, .kid j' k :: is, hs, hk, h => by
-    simp only [alike, Bool.and_eq_true, beq_iff_eq] at h
-    obtain ⟨⟨⟨rfl, hf⟩, hc⟩, hrest⟩ := h
-    obtain ⟨fr, hfr, hnew, _⟩ := hs (.kid j old new sp) (List.mem_cons_self ..)
-    obtain ⟨fr', hfr', hkk⟩ := hk j k (List.mem_cons_self ..)
-    have e : fr' = fr := by rw [hfr] at hfr'; exact (Option.some.inj hfr').symm
-    have hk' : k = new := by
-      rw [hkk, e, ← hf, ← hc, hnew, Frame.lay_first, Frame.lay_col]
-    rw [tokensOf_kid, news, hk',
-      alike_news m ribbon kids rs is (fun r hr => hs r (List.mem_cons_of_mem _ hr))
-        (fun j k hm => hk j k (List.mem_cons_of_mem _ hm)) hrest]
-
-theorem fine_takes (m : Measure S) (ribbon : Nat) (kids : List (Frame S)) :
-    ∀ (ready : List (Ready S)), (∀ r ∈ ready, r.Sound m ribbon kids) → ∀ (P : List (Token S)),
+theorem fine_takes (m : Measure S) (ribbon : Nat) (was : Nat → Option (Frame S)) :
+    ∀ (ready : List (Ready S)), (∀ r ∈ ready, r.Sound m ribbon was) → ∀ (P : List (Token S)),
       Takes (fine (Text.extent P) ready) (P ++ olds ready) (P ++ news ready)
   | [], _, P => Takes.none _
   | .token t :: rs, hs, P => by
-    have ih := fine_takes m ribbon kids rs (fun r hr => hs r (List.mem_cons_of_mem _ hr)) (P ++ [t])
+    have ih := fine_takes m ribbon was rs (fun r hr => hs r (List.mem_cons_of_mem _ hr)) (P ++ [t])
     have e : Text.extent (P ++ [t]) = Text.extent P + (Item.token t).extent := by
       rw [extent_append]
       cases t <;> rfl
     rw [e] at ih
-    simpa [fine, olds, news] using ih
+    simpa [fine, olds, news, Ready.old1, Ready.new1] using ih
   | .kid j old new sp :: rs, hs, P => by
-    obtain ⟨fr, _, hnew, hT⟩ := hs (.kid j old new sp) (List.mem_cons_self ..)
-    have ih := fine_takes m ribbon kids rs (fun r hr => hs r (List.mem_cons_of_mem _ hr)) (P ++ new.tokens)
+    obtain ⟨fr, _, hnew, hT, _⟩ := hs (.kid j old new sp) (List.mem_cons_self ..)
+    have ih := fine_takes m ribbon was rs (fun r hr => hs r (List.mem_cons_of_mem _ hr)) (P ++ new.tokens)
     have e : Text.extent (P ++ new.tokens) = Text.extent P + new.extent := by
       rw [extent_append, hnew, Frame.lay_extent]
     rw [e] at ih
     have first := Takes.inside sp old.tokens new.tokens hT P (olds rs)
-    have both := Takes.then_ _ _ _ _ _ first (by simpa using ih)
-    simpa [fine, olds, news] using both
+    have both := Takes.then_ _ _ _ _ _ first (by simpa [olds, news] using ih)
+    simpa [fine, olds, news, Ready.old1, Ready.new1] using both
+
+/-- Mending is right: its splices take what was kept to the walk. -/
+theorem mend_takes [DecidableEq S] (m : Measure S) (ribbon : Nat) (kids : List (Frame S))
+    (origin : Nat → Option Nat) (was : Nat → Option (Frame S))
+    (horigin : ∀ i j, origin i = some j → kids[i]? = was j) (ready : List (Ready S)) (items : List (Item S))
+    (hs : ∀ r ∈ ready, r.Sound m ribbon was)
+    (hk : ∀ i k, Item.kid i k ∈ items → ∃ fr, kids[i]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col) :
+    Takes (mend origin ready items) (olds ready) (tokensOf items) := by
+  obtain ⟨f1, f2, f3⟩ := strip_ok m ribbon kids origin was horigin ready items hs hk
+  -- What's left of each, from the end.
+  have hs1 : ∀ r ∈ (strip origin ready items).2.1.reverse, r.Sound m ribbon was := by
+    intro r hr
+    exact hs r (by rw [f1]; exact List.mem_append_right _ (List.mem_reverse.mp hr))
+  have hk1 : ∀ i k, Item.kid i k ∈ (strip origin ready items).2.2.reverse →
+      ∃ fr, kids[i]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col := by
+    intro i k hm
+    exact hk i k (by rw [f2]; exact List.mem_append_right _ (List.mem_reverse.mp hm))
+  obtain ⟨b1, b2, b3⟩ := strip_ok m ribbon kids origin was horigin _ _ hs1 hk1
+  simp only [mend]
+  generalize hfront : strip origin ready items = front at f1 f2 f3 b1 b2 b3 hs1 hk1 ⊢
+  generalize hback : strip origin front.2.1.reverse front.2.2.reverse = back at b1 b2 b3 ⊢
+  have r1 : front.2.1 = back.2.1.reverse ++ back.1.1.reverse := by
+    have := congrArg List.reverse b1
+    simpa using this
+  have i1 : front.2.2 = back.2.2.reverse ++ back.1.2.reverse := by
+    have := congrArg List.reverse b2
+    simpa using this
+  have q3 : back.1.1.reverse.map Ready.new1 = back.1.2.reverse.map Item.tokens1 := by
+    rw [List.map_reverse, List.map_reverse, b3]
+  -- Soundness of each run of ready items, and the sizes of the walk's.
+  have sp : ∀ r ∈ front.1.1, r.Sound m ribbon was := fun r hr => hs r (by rw [f1]; exact List.mem_append_left _ hr)
+  have sm : ∀ r ∈ back.2.1.reverse, r.Sound m ribbon was := fun r hr =>
+    hs r (by rw [f1, r1]; exact List.mem_append_right _ (List.mem_append_left _ hr))
+  have sq : ∀ r ∈ back.1.1.reverse, r.Sound m ribbon was := fun r hr =>
+    hs r (by rw [f1, r1]; exact List.mem_append_right _ (List.mem_append_right _ hr))
+  have kext : ∀ (is : List (Item S)), (∀ x ∈ is, x ∈ items) → extents is = Text.extent (tokensOf is) := by
+    intro is sub
+    refine extents_ok is fun i k hm => ?_
+    obtain ⟨fr, _, hkk⟩ := hk i k (sub _ hm)
+    rw [hkk, Frame.lay_extent]
+  have subp : ∀ x ∈ front.1.2, x ∈ items := fun x hx => by rw [f2]; exact List.mem_append_left _ hx
+  have subm : ∀ x ∈ back.2.2.reverse, x ∈ items := fun x hx => by
+    rw [f2, i1]; exact List.mem_append_right _ (List.mem_append_left _ hx)
+  -- The tokens, as the three runs.
+  have tp : tokensOf front.1.2 = news front.1.1 := by
+    rw [tokensOf_flatMap, news, List.flatMap_def, List.flatMap_def, f3]
+  have tq : tokensOf back.1.2.reverse = news back.1.1.reverse := by
+    rw [tokensOf_flatMap, news, List.flatMap_def, List.flatMap_def, q3]
+  have told : olds ready = olds front.1.1 ++ (olds back.2.1.reverse ++ olds back.1.1.reverse) := by
+    conv => lhs; rw [f1, r1]
+    simp [olds]
+  have tnew : tokensOf items = news front.1.1 ++ (tokensOf back.2.2.reverse ++ news back.1.1.reverse) := by
+    conv => lhs; rw [f2, i1]
+    rw [← tp, ← tq]
+    simp [tokensOf_flatMap]
+  rw [told, tnew]
+  -- The front: its kids' splices.
+  have t1 : Takes (fine Extent.zero front.1.1)
+      (olds front.1.1 ++ (olds back.2.1.reverse ++ olds back.1.1.reverse))
+      (news front.1.1 ++ (olds back.2.1.reverse ++ olds back.1.1.reverse)) := by
+    have h := fine_takes m ribbon was front.1.1 sp []
+    have h' := Takes.before _ _ _ h (olds back.2.1.reverse ++ olds back.1.1.reverse)
+    simpa [extent_nil] using h'
+  -- What's between: taken out, and the walk's put in.
+  have t2 : Takes (if back.2.1.reverse.isEmpty && back.2.2.reverse.isEmpty then []
+        else [⟨extents front.1.2, oldExtents back.2.1.reverse, tokensOf back.2.2.reverse⟩])
+      (news front.1.1 ++ (olds back.2.1.reverse ++ olds back.1.1.reverse))
+      (news front.1.1 ++ (tokensOf back.2.2.reverse ++ olds back.1.1.reverse)) := by
+    split
+    · next hem =>
+      simp only [Bool.and_eq_true, List.isEmpty_iff] at hem
+      rw [hem.1, hem.2]
+      simpa [olds, tokensOf_nil] using Takes.none (C := S) _
+    · have h := Takes.inside _ _ _ (Takes.whole (olds back.2.1.reverse) (tokensOf back.2.2.reverse))
+        (news front.1.1) (olds back.1.1.reverse)
+      rw [kext front.1.2 subp, tp, oldExtents_ok m ribbon was _ sm]
+      simpa [Splice.shift, Extent.add_zero] using h
+  -- The end: its kids' splices, past the front and what's put in.
+  have t3 : Takes (fine (extents front.1.2 + extents back.2.2.reverse) back.1.1.reverse)
+      (news front.1.1 ++ (tokensOf back.2.2.reverse ++ olds back.1.1.reverse))
+      (news front.1.1 ++ (tokensOf back.2.2.reverse ++ news back.1.1.reverse)) := by
+    have h := fine_takes m ribbon was back.1.1.reverse sq (news front.1.1 ++ tokensOf back.2.2.reverse)
+    have e : Text.extent (news front.1.1 ++ tokensOf back.2.2.reverse) =
+        extents front.1.2 + extents back.2.2.reverse := by
+      rw [extent_append, ← tp, ← kext front.1.2 subp, ← kext _ subm]
+    rw [e] at h
+    simpa [List.append_assoc] using h
+  exact Takes.then_ _ _ _ _ _ (Takes.then_ _ _ _ _ _ t1 t2) t3
 
 theorem olds_readied [DecidableEq S] (relay : Kept S → List (Splice S) × Kept S) (i : Nat) (items : List (Item S)) :
     olds (items.map (readied relay i)) = tokensOf items := by
+  rw [tokensOf_flatMap]
   induction items with
-  | nil => simp [olds, tokensOf_nil]
+  | nil => rfl
   | cons it is ih =>
+    simp only [olds, List.map_cons, List.flatMap_cons] at ih ⊢
+    rw [ih]
     cases it with
-    | token t => simp [readied, olds, tokensOf_token, ih]
-    | kid j k =>
-      by_cases hj : j = i <;> simp [readied, hj, olds, tokensOf_kid, ih]
+    | token t => rfl
+    | kid j k => by_cases hj : j = i <;> simp [readied, hj, Ready.old1, Item.tokens1]
+
+theorem olds_ready (items : List (Item S)) : olds (items.map Item.ready) = tokensOf items := by
+  rw [tokensOf_flatMap]
+  induction items with
+  | nil => rfl
+  | cons it is ih =>
+    simp only [olds, List.map_cons, List.flatMap_cons] at ih ⊢
+    rw [ih]
+    cases it <;> rfl
 
 theorem Frame.lay_frame (m : Measure S) (ribbon : Nat) (fr : Frame S) (first col : Nat) :
     (Frame.lay m ribbon fr first col).frame = fr := by
   cases fr with
   | node doc kids => rw [Frame.lay_node]; rfl
+
+/-- Walking a frame again is right: what's kept is the frame laid out from
+nothing, and the splices take what was kept there. -/
+theorem rewalk_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) (doc : Doc S) (kids : List (Frame S))
+    (origin : Nat → Option Nat) (was : Nat → Option (Frame S))
+    (horigin : ∀ i j, origin i = some j → kids[i]? = was j) (first col : Nat) (ready : List (Ready S))
+    (hs : ∀ r ∈ ready, r.Sound m ribbon was) :
+    (rewalk m ribbon doc kids origin first col ready).2 = Frame.lay m ribbon (.node doc kids) first col ∧
+      Takes (rewalk m ribbon doc kids origin first col ready).1 (olds ready)
+        (Frame.lay m ribbon (.node doc kids) first col).tokens := by
+  obtain ⟨hitems, hstop, _⟩ := Doc.lay_agree m ribbon (kidFits m.width kids) (reuse m ribbon kids origin)
+    (kidLay m ribbon kids) (fun s (_ : Unit) => ∀ r ∈ s, r.Sound m ribbon was)
+    (fun j f' c' s _ hs' => reuse_ok m ribbon kids origin was horigin j f' c' s hs') doc col first _ () hs
+  have hk : ∀ j k, Item.kid j k ∈ (Doc.lay m ribbon (kidFits m.width kids) (reuse m ribbon kids origin) doc col
+      first ready).items → ∃ fr, kids[j]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col := by
+    intro j k hm
+    rw [hitems] at hm
+    obtain ⟨f', c', u, hs'⟩ := Doc.lay_kids m ribbon _ _ doc col first () j k hm
+    exact kidLay_some m ribbon _ j f' c' u k hs'
+  have ht := mend_takes m ribbon kids origin was horigin ready _ hs hk
+  rw [Frame.lay_node, Kept.tokens_node]
+  simp only [rewalk]
+  refine ⟨by rw [hitems, hstop], ?_⟩
+  rw [← hitems]
+  exact ht
 
 /-- Laying out again is right: what's kept after an edit is the edited
 frame laid out from nothing, and the splices take the tokens there,
@@ -688,14 +959,12 @@ theorem Kept.relay_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (e : 
     rw [Frame.lay_extent]
     exact Takes.whole _ _
   | .kid i e, .node doc kids, f, c => by
-    have hold := Frame.lay_extent m ribbon (.node doc kids) f c
-    rw [Frame.lay_node] at hold ⊢
-    rw [Kept.tokens_node] at hold ⊢
-    simp only [Edit.apply]
     rw [Frame.lay_node, Kept.tokens_node]
+    simp only [Edit.apply, Kept.relay]
     -- The kept items, ready for the kids as they are now.
     have hready : ∀ r ∈ (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
-        (readied (Kept.relay m ribbon e) i), r.Sound m ribbon (kids.modify i (Edit.apply e)) := by
+        (readied (Kept.relay m ribbon e) i),
+        r.Sound m ribbon (fun j => (kids.modify i (Edit.apply e))[j]?) := by
       intro r hr
       obtain ⟨it, hit, rfl⟩ := List.mem_map.mp hr
       cases it with
@@ -703,70 +972,54 @@ theorem Kept.relay_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (e : 
       | kid j k =>
         obtain ⟨f', c', u, hs⟩ := Doc.lay_kids m ribbon _ _ doc c f () j k hit
         obtain ⟨frj, hfr, hkk⟩ := kidLay_some m ribbon kids j f' c' u k hs
+        have hext : k.extent = Text.extent k.tokens := by rw [hkk, Frame.lay_extent]
         by_cases hj : j = i
         · subst hj
           have ih := Kept.relay_ok m ribbon e frj k.first k.col
           rw [← hkk] at ih
           simp only [readied, ite_true]
-          exact ⟨Edit.apply e frj, by simp [hfr], ih.1, by rw [ih.1]; exact ih.2⟩
+          exact ⟨Edit.apply e frj, by simp [hfr], ih.1, by rw [ih.1]; exact ih.2, hext⟩
         · simp only [readied, hj, ite_false]
-          refine ⟨frj, ?_, hkk, Takes.none _⟩
+          refine ⟨frj, ?_, hkk, Takes.none _, hext⟩
           simp [hfr, Ne.symm hj]
-    -- Walking with what's kept is walking from nothing.
-    have hw := Doc.lay_agree m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-      (reuse m ribbon (kids.modify i (Edit.apply e))) (kidLay m ribbon (kids.modify i (Edit.apply e)))
-      (fun s (_ : Unit) => ∀ r ∈ s, r.Sound m ribbon (kids.modify i (Edit.apply e)))
-      (fun j f' c' s _ hs => reuse_ok m ribbon _ j f' c' s hs) doc c f _ () hready
-    obtain ⟨hitems, hstop, _⟩ := hw
-    simp only [Kept.relay]
-    have hkept : Kept.node (.node doc (kids.modify i (Edit.apply e))) f c
-        (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-          (reuse m ribbon (kids.modify i (Edit.apply e))) doc c f
-          ((Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
-            (readied (Kept.relay m ribbon e) i))).items
-        (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-          (reuse m ribbon (kids.modify i (Edit.apply e))) doc c f
-          ((Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
-            (readied (Kept.relay m ribbon e) i))).stop
-        (extents (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-          (reuse m ribbon (kids.modify i (Edit.apply e))) doc c f
-          ((Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
-            (readied (Kept.relay m ribbon e) i))).items) =
-        Kept.node (.node doc (kids.modify i (Edit.apply e))) f c
-          (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-            (kidLay m ribbon (kids.modify i (Edit.apply e))) doc c f ()).items
-          (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-            (kidLay m ribbon (kids.modify i (Edit.apply e))) doc c f ()).stop
-          (extents (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-            (kidLay m ribbon (kids.modify i (Edit.apply e))) doc c f ()).items) := by
-      rw [hitems, hstop]
-    split
-    · next hal =>
-      refine ⟨hkept, ?_⟩
-      have hk : ∀ j k, Item.kid j k ∈ (Doc.lay m ribbon (kidFits m.width (kids.modify i (Edit.apply e)))
-          (reuse m ribbon (kids.modify i (Edit.apply e))) doc c f
-          ((Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
-            (readied (Kept.relay m ribbon e) i))).items →
-          ∃ fr, (kids.modify i (Edit.apply e))[j]? = some fr ∧ k = Frame.lay m ribbon fr k.first k.col := by
-        intro j k hm
-        rw [hitems] at hm
-        obtain ⟨f', c', u, hs⟩ := Doc.lay_kids m ribbon _ _ doc c f () j k hm
-        exact kidLay_some m ribbon _ j f' c' u k hs
-      have hn := alike_news m ribbon _ _ _ hready hk hal
-      have ht : Takes (fine Extent.zero _) ([] ++ olds _) ([] ++ news _) := fine_takes m ribbon _ _ hready []
-      rw [olds_readied] at ht
-      rw [← hitems, hn]
-      simpa using ht
-    · refine ⟨hkept, ?_⟩
-      rw [← hitems]
-      have : (Kept.node (.node doc kids) f c
-          (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items
-          (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).stop
-          (extents (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items)).extent =
-          extents (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items := rfl
-      rw [this] at hold
-      rw [hold]
-      exact Takes.whole _ _
+    have h := rewalk_ok m ribbon doc (kids.modify i (Edit.apply e)) some
+      (fun j => (kids.modify i (Edit.apply e))[j]?) (fun a b hab => by cases hab; rfl) f c _ hready
+    rw [olds_readied] at h
+    exact h
+  | .reshape doc' sources, .node doc kids, f, c => by
+    rw [Frame.lay_node, Kept.tokens_node]
+    simp only [Edit.apply, Kept.relay]
+    have hready : ∀ r ∈ (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
+        Item.ready, r.Sound m ribbon (fun j => kids[j]?) := by
+      intro r hr
+      obtain ⟨it, hit, rfl⟩ := List.mem_map.mp hr
+      cases it with
+      | token t => exact True.intro
+      | kid j k =>
+        obtain ⟨f', c', u, hs⟩ := Doc.lay_kids m ribbon _ _ doc c f () j k hit
+        obtain ⟨frj, hfr, hkk⟩ := kidLay_some m ribbon kids j f' c' u k hs
+        exact ⟨frj, hfr, hkk, Takes.none _, by rw [hkk, Frame.lay_extent]⟩
+    have horigin : ∀ i j, Source.origin sources.toArray kids.length i = some j →
+        (sources.map (Source.frame kids))[i]? = kids[j]? := by
+      intro i j h
+      simp only [Source.origin, List.getElem?_toArray] at h
+      cases hsi : sources[i]? with
+      | none => simp [hsi] at h
+      | some src =>
+        rw [hsi] at h
+        cases src with
+        | fresh fr => simp at h
+        | kept j' =>
+          simp only at h
+          split at h
+          · next hlt =>
+            cases h
+            simp [hsi, Source.frame, List.getElem?_eq_getElem hlt]
+          · cases h
+    have h := rewalk_ok m ribbon doc' (sources.map (Source.frame kids))
+      (Source.origin sources.toArray kids.length) (fun j => kids[j]?) horigin f c _ hready
+    rw [olds_ready] at h
+    exact h
 
 /-! ## Edits of kids -/
 

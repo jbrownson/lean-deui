@@ -29,11 +29,14 @@ def sharedValue (k n : Nat) : Value :=
 /-- A notebook of `n` entries, each a record of a few fields and a list, and
 a reference to one of ten shared cells, which it shows. -/
 def notebook (n : Nat) : Document :=
+  -- A record as the editor and the files make them: its fields in label order.
+  let record (fields : List (CellId × Value)) : Value :=
+    .record (fields.foldl (fun acc (l, v) => Value.setField acc l v) [])
   let entry (i : Nat) : Value :=
-    .record [(Kinds.name, Value.text s!"entry {i}"),
+    record [(Kinds.name, Value.text s!"entry {i}"),
       (Kinds.fields, .list ((Position.spread 12).zip ((List.range 12).map fun j => Value.u64 (i * j)))),
       (Kinds.function, .cell (shared[i % 10]!)),
-      (Kinds.body, .record [(Kinds.name, Value.text "some words that make the line long enough to wrap around"),
+      (Kinds.body, record [(Kinds.name, Value.text "some words that make the line long enough to wrap around"),
         (Kinds.value, Value.u64 i), (Kinds.params, Value.text "and a second field of text, to be sure it does")])]
   { root := some (Value.ofKind Kinds.notebook [(Kinds.entries, .list ((Position.spread n).zip ((List.range n).map entry)))]),
     cells := (List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k 0)) {} }
@@ -86,6 +89,16 @@ def main (args : List String) : IO Unit := do
       let m ← timed "the wheel" m (List.replicate 20 (.scroll 0 0 0 (-1)))
       if args.contains "wheel" then
         let _ ← timed "the wheel, 3000 times" m ((List.replicate 1500 (.scroll 0 0 0 (-1))) ++ List.replicate 1500 (.scroll 0 0 0 1))
+        return
+      if args.contains "structure" then
+        -- What changes of structure cost, one at a time: an element of the first entry's list.
+        let mut m ← timed "to a number in a list" m (List.replicate 7 (key 63235))
+        for (name, e) in [("Return: a place for an element", key 13), ("typing a digit", .text "5"),
+            ("Return: the element", key 13), ("Backspace: the element to a hole", key 127),
+            ("Backspace: the hole gone", key 127), ("undo", .key 'z'.toNat.toUInt32 true 2),
+            ("undo", .key 'z'.toNat.toUInt32 true 2), ("redo", .key 'z'.toNat.toUInt32 true 3),
+            ("Space: a fold", .text " ")] do
+          m ← timed name m [e]
         return
       let m ← timed "an arrow key" m (List.replicate 20 (key 63233))
       if args.contains "arrow" then

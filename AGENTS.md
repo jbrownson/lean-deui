@@ -73,7 +73,11 @@ Read `README.md` first for what the repository is.
   it was.
 - `progred_measure` says what events cost; run it before and after a
   change to the view, on a notebook (`progred_measure 300`) and on the
-  same entries as one part (`progred_measure 300 one`).
+  same entries as one part (`progred_measure 300 one`); with `structure`
+  it times changes of structure one at a time.
+- A record is made with `Value.setField`, which keeps its fields in label
+  order, never as a literal list of fields: a write within one that isn't
+  in order can't be taken back by a write.
 - Skinny is the language: the subset of Lean that `Progred/Skinny.lean`
   makes from a document. A function Lean supplies is a cell in
   `Progred/Builtin.lean` and a case in `Skinny.supplied`; what code is run

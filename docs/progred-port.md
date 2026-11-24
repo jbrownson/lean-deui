@@ -224,6 +224,25 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   there is. Where a frame now fits differently (it was on one line and
   isn't), that frame's text is replaced. A splice becomes edits of the
   lines it reaches.
+- **A frame drawn again keeps its kids.** Where a frame sees something new
+  (an element added or taken away, a field given a value, a hole opened
+  or closed), it's reshaped: its doc is new, and each kid is one it had,
+  found by its step and how it's drawn, or grown new. The layout walks the
+  frame again with the kids it had as they're kept, and splices the text
+  between what came out the same at the front and at the end
+  (`Deui/Fit.lean`, `mend`). An element added to a list of 300 lays out
+  that element.
+- **Undo is the changes that take a step back.** Every change has one that
+  takes it back, worked out from the model before it's made
+  (`Model.back`): a write at a path by a write there of what was, an entry
+  added by that entry taken away. A write keeps them, with the selection
+  and the folds as they were, and undo makes them, keeping what takes
+  those back for redo. So undo goes through the view as any edit does, and
+  costs what it undoes. `back_ok` and `back_cells` say a change taken back
+  gives the root, the selection, the folds and every definition as they
+  were. A record's fields are kept in label order by everything that makes
+  one; where a record isn't, a write within it isn't taken back exactly by
+  a write, and the root as it was is put back.
 - **A selection that rests is a wash, not a layout.** Only a selection
   being typed in, or one with a hole or a label drawn for it, is part of
   what a part is drawn with. One that rests on a value is washed under the
@@ -296,12 +315,14 @@ the window was driven under Xvfb):
 - The view by derivative, down to a part's frames. `progred_measure`, on a
   notebook of 3,300 lines in 300 entries, a tenth of which reach each of
   ten definitions: the wheel about 25 µs, an arrow key 50 µs, a keystroke
-  0.2 to 0.35 ms, a definition written 4 ms, against 20 ms to lay it out
-  from nothing. On the same entries as one part, a list of 300 records at
-  the root (`progred_measure 300 one`): an arrow key 50 µs, a keystroke 0.5
-  to 0.65 ms, an element added to the root list 3 ms. Before a part's
-  layout had a derivative, a keystroke or an arrow key there took a third
-  of a second.
+  0.2 to 0.35 ms, an element added or taken away 0.2 to 0.6 ms, undo and
+  redo 0.1 to 0.5 ms, a definition written 4 ms, against 20 ms to lay it
+  out from nothing. On the same entries as one part, a list of 300 records
+  at the root (`progred_measure 300 one`): an arrow key 50 µs, a keystroke
+  0.5 to 0.6 ms, the place for a new field 1 ms. Before a part's layout
+  had a derivative, a keystroke or an arrow key there took a third of a
+  second. `progred_measure 300 structure` times changes of structure one
+  at a time.
 
 Not here yet:
 
@@ -324,12 +345,16 @@ Not here yet:
     costs its width: a list of 300 at the root is most of the half
     millisecond a keystroke takes in one large part. A sequence held as a
     tree would make these the logarithm.
-  - A change to what a list or a record holds grows that frame again with
-    all under it: an element added, a field given a value, a hole opened or
-    closed. So does a write within an evaluation, or within a record drawn
-    by a projection, since those read their whole value. Adding an element
-    to a list that is the whole document grows everything again. Frames
-    whose kids are edited as a list are the way on.
+  - A change that brings a cell into a part that it didn't reach grows the
+    whole part again: a field given a new label, a new function or named
+    cell. So does a fold, and what Lean gives. A frame doesn't say which
+    cells it looked up, so when the definitions a part is drawn from
+    change, none of its frames can be taken as they stand. In a notebook
+    that's an entry; in one large part it's everything (17 ms at 3,000
+    lines).
+  - A write within an evaluation, or within a record drawn by a
+    projection, draws that frame again with the kids it had, since those
+    read their whole value.
   - A write still walks its part once to find what it reaches, and a
     definition written grows again every part that asked for the cell,
     whole, though it may show only the name. Frames that say what they read,
@@ -337,10 +362,9 @@ Not here yet:
   - A frame that follows another on its line, when that one's width
     changes, is laid out again where it now starts, though only an
     alternative that no longer fits could change it.
-  - Undo and redo replace the document, and every part is laid out again,
-    twice over: once for the definitions and once for the parts, which are
-    all taken out and put in. Undo that said what it undid would cost what
-    it undid.
+  - A run of typing is one undo step, kept as what takes back its first
+    keystroke: that the rest were written at the same place, and so are
+    taken back with it, isn't looked at.
   - An arrow key reads the lines of its part from the top to where the
     selection starts, each time; the frames know where that is.
 - Laying a document out from nothing takes 20 ms where it took 16, and the
@@ -351,7 +375,12 @@ Not here yet:
   is as it was: of its value without what's inside it, and of the selection
   at it. They're small values compared once each; none is a search for what
   changed. After a write, a part's definitions and results are compared
-  with what they were before the frames are taken as they stand.
+  with what they were before the frames are taken as they stand. A frame
+  drawn again finds which of its kids it had by their step and how they're
+  drawn, read along in order; and its tokens are compared with what was
+  kept from the front and from the end, to splice only what's between. A
+  change within the root is taken back by a change within it only where
+  that gives the root as it was, which is looked at.
 - Entry numbers, which the Rust version shows in a margin.
 - Nothing checks that a handler changes what the view reads only through
   `change`; the state follows the edits, so a field set directly shows as a

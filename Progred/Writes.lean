@@ -153,4 +153,63 @@ theorem put_deep (v : Value) (s r : Step) (rest : List Step) (w : Option Value) 
         rw [hi] at h
         exact ⟨c, c', rfl, by simp [put, hi], h⟩
 
+theorem find_filter_other {α β : Type} [BEq α] [LawfulBEq α] (xs : List (α × β)) (a b : α) (h : b ≠ a) :
+    (xs.filter (·.1 != a)).find? (·.1 == b) = xs.find? (·.1 == b) := by
+  induction xs with
+  | nil => rfl
+  | cons x rest ih =>
+    by_cases hx : x.1 = a
+    · have keep : (x.1 != a) = false := by simp [hx]
+      have nb : (x.1 == b) = false := by
+        rw [hx]
+        exact beq_false_of_ne (Ne.symm h)
+      rw [List.filter_cons, List.find?_cons]
+      simp only [keep, nb]
+      exact ih
+    · have keep : (x.1 != a) = true := by simp [hx]
+      rw [List.filter_cons, List.find?_cons]
+      simp only [keep, ite_true]
+      rw [List.find?_cons, ih]
+
+/-- After a step is taken away, every other step leads where it did. -/
+theorem step_withoutStep_other (v : Value) (s : Step) (v' : Value) (h : v.withoutStep s = some v') (st : Step)
+    (hne : st ≠ s) : v'.step? st = v.step? st := by
+  cases v <;> cases s <;> simp only [withoutStep, Option.some.injEq, reduceCtorEq] at h
+  · subst h
+    cases st with
+    | key l => rfl
+    | element q => simp [step?, find_filter_other _ _ q (fun e => hne (by rw [e]))]
+    | follow => rfl
+  · subst h
+    cases st with
+    | key l => simp [step?, field?, find_filter_other _ _ l (fun e => hne (by rw [e]))]
+    | element q => rfl
+    | follow => rfl
+
+theorem withoutStep_not_cell (v : Value) (s : Step) (v' : Value) (h : v.withoutStep s = some v') :
+    (∀ c, v ≠ .cell c) ∧ ∀ c, v' ≠ .cell c := by
+  cases v <;> cases s <;> simp only [withoutStep, Option.some.injEq, reduceCtorEq] at h
+  · subst h
+    refine ⟨?_, ?_⟩ <;> intro c e <;> cases e
+  · subst h
+    refine ⟨?_, ?_⟩ <;> intro c e <;> cases e
+
+/-- A write at a step or under it leaves where every other step leads, and
+is of a value that isn't a cell, before or after. -/
+theorem put_other (v : Value) (s : Step) (rest : List Step) (w : Option Value) (v' : Value)
+    (h : v.put (s :: rest) w = some v') :
+    (∀ st, st ≠ s → v'.step? st = v.step? st) ∧ (∀ c, v ≠ .cell c) ∧ ∀ c, v' ≠ .cell c := by
+  cases rest with
+  | nil =>
+    cases w with
+    | some x =>
+      have hs : v.setStep s x = some v' := h
+      exact ⟨fun st hne => step_setStep_other v s x v' hs st hne, setStep_not_cell v s x v' hs⟩
+    | none =>
+      have hs : v.withoutStep s = some v' := h
+      exact ⟨fun st hne => step_withoutStep_other v s v' hs st hne, withoutStep_not_cell v s v' hs⟩
+  | cons r rest =>
+    obtain ⟨c, c', _, _, hset⟩ := put_deep v s r rest w v' h
+    exact ⟨fun st hne => step_setStep_other v s c' v' hset st hne, setStep_not_cell v s c' v' hset⟩
+
 end Progred.Value

@@ -370,6 +370,13 @@ theorem Takes.inside (sp : List (Splice C)) (X X' : List (Token C)) (h : Takes s
   rw [e, e, m]
   exact h (A ++ P) (Q ++ B)
 
+/-- Splices that take `T` to `T'` take them there with something after. -/
+theorem Takes.before (sp : List (Splice C)) (T T' : List (Token C)) (h : Takes sp T T') (Q : List (Token C)) :
+    Takes sp (T ++ Q) (T' ++ Q) := by
+  intro A B
+  have := h A (Q ++ B)
+  simpa using this
+
 /-- One run of splices then another. -/
 theorem Takes.then_ (sp sp' : List (Splice C)) (T T' T'' : List (Token C)) (h : Takes sp T T')
     (h' : Takes sp' T' T'') : Takes (sp ++ sp') T T'' := by
