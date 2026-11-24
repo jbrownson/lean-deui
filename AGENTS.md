@@ -54,12 +54,15 @@ Read `README.md` first for what the repository is.
   else would be kept when it shouldn't be. Something new the drawing
   depends on goes into `Seen` and a `Frame`'s restriction of it, and
   `touched` then asks it of each part.
-- The model's edits say which definitions were written. A handler works
-  on the model, and what it writes to a cell has to be noted: write the
-  document through `Model.write` with the path written at, or add the
-  cell to `written`. A cell written and not noted keeps its old
-  definition in the state the app holds. Setting `doc` directly is how
-  that happens.
+- The model's edits say what changed, and the view compares nothing to
+  find out. What the view reads of the model (the document, the selection,
+  the folds, what Lean gave, the scroll, the window's size) is changed only
+  by `Model.change`, which notes the change: write the document through
+  `Model.write` with the path written at, and the rest through `change`,
+  `selecting`, `folding`. Setting one of those fields directly leaves the
+  change out of the state the app holds. A stage that needs to know what
+  changed gets an edit that says so; it doesn't compare a value with what
+  it was.
 - `progred_measure` says what events cost; run it before and after a
   change to the view, on a notebook (`progred_measure 300`).
 - Skinny is the language: the subset of Lean that `Progred/Skinny.lean`
