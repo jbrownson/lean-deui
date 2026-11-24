@@ -35,6 +35,20 @@ theorem second_ok (g : Cached cb cc) (h : g.ok) : (second (ca := ca) g).ok := by
     ((ca.apply d.1 a.1, (g.f (cb.apply d.2 a.2)).1), (g.f (cb.apply d.2 a.2)).2)
   rw [← e]
 
+/-- `g`, with the first of the pair kept beside its result, for what comes
+after to read too. -/
+def keeping (g : Cached (prod ca cb) cc) : Cached (prod ca cb) (prod ca cc) where
+  Cache := g.Cache
+  f a := ((a.1, (g.f a).1), (g.f a).2)
+  df c d := ((d.1, (g.df c d).1), (g.df c d).2)
+
+theorem keeping_ok (g : Cached (prod ca cb) cc) (h : g.ok) : (keeping g).ok := by
+  intro a d
+  have e := h a d
+  show ((ca.apply d.1 a.1, cc.apply (g.df (g.f a).2 d).1 (g.f a).1), (g.df (g.f a).2 d).2) =
+    ((ca.apply d.1 a.1, (g.f ((prod ca cb).apply d a)).1), (g.f ((prod ca cb).apply d a)).2)
+  rw [← e]
+
 /-- `g`, with something of the first of the pair carried beside its result. -/
 def carrying {D : Type} (h : ca.Value → D) (g : Cached (prod ca cb) cc) : Cached (prod ca cb) (prod (latest D) cc) where
   Cache := ca.Value × g.Cache

@@ -60,3 +60,6 @@ or a new axiom. -/
 
 /-- info: 'Progred.Derived.lines_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Derived.lines_ok
+
+/-- info: 'Progred.Derived.treed_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Derived.treed_ok

@@ -11,6 +11,7 @@ import Progred.Editing
 import Progred.Entries
 import Progred.Editor
 import Progred.Derived.Tree
+import Progred.Derived.Links
 import Progred.Derived.Forms
 import Progred.Axioms
 import Progred.Run

@@ -43,8 +43,12 @@ def positions (n : Nat) : List Position := Position.spread n
 
 def root (n : Nat) : Value := .list ((positions n).zip ((List.range n).map entry))
 
+/-- A definition that's more than a name, so the cell is drawn open where
+it's a field of a record with no kind. -/
+def more (n : String) (k : Nat) : Value := rec [(Kinds.name, Value.text n), (Kinds.value, Value.u64 k)]
+
 def cells0 : Editor.Cells :=
-  ((List.range 10).foldl (fun (cells : Editor.Cells) k => cells.insert shared[k]! (nameOnly s!"shared {k}")) {}).insert
+  ((List.range 10).foldl (fun (cells : Editor.Cells) k => cells.insert shared[k]! (more s!"shared {k}" k)) {}).insert
     tag (nameOnly "tag")
 
 /-- One step of a measurement: definitions written, and writes in the
@@ -52,6 +56,8 @@ value. -/
 structure Step' where
   ces : List Model.CellsEdit := []
   writes : List (List Step × Option Value) := []
+  /-- The folds in effect from this step. -/
+  folds : List (Path × Bool) := []
 
 abbrev OldCache := Editor.part.Cache
 /-- The derived lines of a value at the root. -/
@@ -62,6 +68,7 @@ abbrev NewCache := derived.Cache
 
 structure State where
   cells : Editor.Cells
+  folds : List (Path × Bool)
   value : Value
   old : OldCache
   new : NewCache
@@ -73,14 +80,14 @@ def seen : Display.Seen := {}
 def oldF (cells : Editor.Cells) (value : Value) : List Line × OldCache :=
   Editor.part.f ((seen, cells), .whole (some value))
 
-def newF (cells : Editor.Cells) (value : Value) : List Line × NewCache :=
-  derived.f (((80 : Nat), cells), value)
+def newF (cells : Editor.Cells) (value : Value) (folds : List (Path × Bool) := []) : List Line × NewCache :=
+  derived.f ((((80 : Nat), folds), cells), value)
 
 def oldDf (k : OldCache) (step : Step') : Editor.PartLines.Edit × OldCache :=
-  Editor.part.df k ((seen, step.ces), step.writes.map fun (rel, w) => .write rel w)
+  Editor.part.df k ((({ folds := step.folds } : Display.Seen), step.ces), step.writes.map fun (rel, w) => .write rel w)
 
 def newDf (k : NewCache) (step : Step') : Editor.PartLines.Edit × NewCache :=
-  derived.df k (((80 : Nat), step.ces), step.writes)
+  derived.df k ((((80 : Nat), step.folds), step.ces), step.writes)
 
 def applied (es : Editor.PartLines.Edit) (ls : List Line) : List Line := Editor.PartLines.apply es ls
 
@@ -93,7 +100,7 @@ def start (n : Nat) : IO State := do
   let t2 ← IO.monoNanosNow
   IO.println s!"{old.1.length} lines; from nothing: as it is {(t1 - t0) / 1000} µs, derived {(t2 - t1) / 1000} µs"
   if !(decide (old.1 = new.1)) then IO.println "  !! the two draw different lines"
-  return ⟨cells0, value, old.2, new.2, old.1, new.1⟩
+  return ⟨cells0, [], value, old.2, new.2, old.1, new.1⟩
 
 /-- Runs steps through both, timing each, and checks what each keeps
 against its lines from nothing. -/
@@ -113,11 +120,12 @@ def timed (name : String) (s : State) (steps : List Step') : IO State := do
     newTime := newTime + (t2 - t1)
     oldEdits := oldEdits + old.1.length
     newEdits := newEdits + new.1.length
-    s := { cells := run Editor.cellsEdits step.ces s.cells, value := run Derived.Writes step.writes s.value,
+    s := { cells := run Editor.cellsEdits step.ces s.cells, folds := step.folds,
+           value := run Derived.Writes step.writes s.value,
            old := old.2, new := new.2, oldLines := applied old.1 s.oldLines, newLines := applied new.1 s.newLines }
   let n := steps.length
   IO.println s!"  {name}: as it is {oldTime / n / 1000} µs ({oldEdits / n} line edits), derived {newTime / n / 1000} µs ({newEdits / n})"
-  let fresh := (newF s.cells s.value).1
+  let fresh := (newF s.cells s.value s.folds).1
   if !(decide (s.newLines = fresh)) then IO.println "  !! derived: the lines kept aren't the lines from nothing"
   if !(decide (s.oldLines = fresh)) then IO.println "  !! as it is: the lines kept aren't the derived lines from nothing"
   return s
@@ -178,9 +186,9 @@ def oldPart (cells : Editor.Cells) (entry : Display.Entry) : List Line :=
 
 /-- A part's lines, derived; none for a part with no value. -/
 def newPart (cells : Editor.Cells) : Display.Entry → Option (List Line)
-  | .entry p v => some ((Derived.lines {} Display.entriesPath (.entry p)).f (((80 : Nat), cells), .list [(p, v)])).1
-  | .end_ => some ((Derived.lines {} Display.entriesPath .end_).f (((80 : Nat), cells), .list [])).1
-  | .whole (some v) => some ((Derived.lines {} [] (.value false)).f (((80 : Nat), cells), v)).1
+  | .entry p v => some ((Derived.lines {} Display.entriesPath (.entry p)).f ((((80 : Nat), ([] : List (Path × Bool))), cells), .list [(p, v)])).1
+  | .end_ => some ((Derived.lines {} Display.entriesPath .end_).f ((((80 : Nat), ([] : List (Path × Bool))), cells), .list [])).1
+  | .whole (some v) => some ((Derived.lines {} [] (.value false)).f ((((80 : Nat), ([] : List (Path × Bool))), cells), v)).1
   | .whole none => none
 
 /-- Which parts of a file the two draw the same, and where the first of
@@ -235,8 +243,10 @@ def main (args : List String) : IO Unit := do
     ("an entry added", (reps.zip news).map fun (j, p) => { writes := [([.element p], some (entry (1000 + j)))] }),
     ("an entry taken away", news.map fun p => { writes := [([.element p], none)] }),
     ("a label every entry has, renamed", reps.map fun j => { ces := [.set tag (some (nameOnly s!"tag {j}"))] }),
-    ("a cell a tenth of the entries show, renamed", reps.map fun j =>
-      { ces := [.set shared[3]! (some (nameOnly s!"shared, renamed {j}"))] }),
+    ("a definition a tenth of the entries show open, written", reps.map fun j =>
+      { ces := [.set shared[3]! (some (more s!"shared, renamed {j}" j))] }),
+    ("a cell folded shut, and the last opened", reps.map fun j =>
+      { folds := [([.element (at_ j), .key Kinds.function], true)] }),
     ("a cell nothing shows, written", reps.map fun j => { ces := [.set unseen (some (nameOnly s!"unseen {j}"))] })]
   let steps := steps.filter fun (name, _) => (name.splitOn only).length > 1 || only.isEmpty
   if args.contains "parts" then
@@ -255,7 +265,7 @@ def main (args : List String) : IO Unit := do
       parts := parts.push ⟨v, old.2, new.2, old.1, new.1⟩
     let mut cells := cells0
     for (name, run) in steps do
-      if !name.startsWith "an entry" then
+      if !name.startsWith "an entry" && !name.startsWith "a cell folded" then
         (cells, parts) ← timedParts name ps cells parts run
   else
     let mut s ← start n

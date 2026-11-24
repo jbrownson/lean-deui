@@ -32,6 +32,8 @@ structure Label where
   /-- Whether it's drawn whole, with no kids: worked out once, as the tree
   is made. -/
   leaf : Bool
+  /-- For a cell: whether its definition's tree is hung under it. -/
+  opened : Bool := false
 
 /-- Whether a value is drawn whole, with no kids: a literal. It reads no
 further than the value's fields. -/
@@ -55,7 +57,7 @@ def reads (v : Value) : Bool :=
 
 /-- A node's label, from its value and that value without what's inside. -/
 def labelOf (path : Path) (hint : Hint) (sv v : Value) : Label :=
-  ⟨path, hint, sv, if reads sv then some v else none, whole sv⟩
+  ⟨path, hint, sv, if reads sv then some v else none, whole sv, false⟩
 
 def label (path : Path) (hint : Hint) (v : Value) : Label := labelOf path hint (shallow v) v
 
@@ -89,10 +91,16 @@ def fieldHint (hint : Hint) (kind : Option CellId) (l : CellId) (kid : Value) : 
       else if l == Kinds.name then .name "name"
       else .value false
 
+-- What hangs under a cell, by where it is and how it's drawn: its
+-- definition's tree, where it's drawn open, or nothing.
+variable (hang : Path → Hint → CellId → List (Tree Label))
+
 mutual
 /-- A value's tree, from where it is and how it's drawn there. -/
 def tree (path : Path) (hint : Hint) : Value → Tree Label
-  | .cell c => .node (label path hint (.cell c)) []
+  | .cell c =>
+    let kids := hang path hint c
+    .node { label path hint (.cell c) with opened := !kids.isEmpty } kids
   | .blob b => .node (label path hint (.blob b)) []
   | .list items => .node (label path hint (.list items)) (itemTrees path (itemHint hint) items)
   | .record fields =>
@@ -163,7 +171,7 @@ whole value. A kid put in, over one or between two, is the node's label
 and kids again, the others kept. -/
 def setEdits (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : Value)
     (inner : Option (List (Tree.Edit Label))) : List (Tree.Edit Label) :=
-  if whole (shallow v') then [.replace (tree path hint v')]
+  if whole (shallow v') then [.replace (tree hang path hint v')]
   else
     match landing v s with
     | some (n, i, true) =>
@@ -172,11 +180,11 @@ def setEdits (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : Value)
         es.map (.kid i) ++ (if reads (shallow v') then [.reshape (label path hint v') (keptFrom 0 n)] else [])
       | none =>
         [.reshape (label path hint v')
-          (keptFrom 0 i ++ .fresh (tree (path ++ [s]) (stepHint hint v' s x) x) :: keptFrom (i + 1) (n - (i + 1)))]
+          (keptFrom 0 i ++ .fresh (tree hang (path ++ [s]) (stepHint hint v' s x) x) :: keptFrom (i + 1) (n - (i + 1)))]
     | some (n, i, false) =>
       [.reshape (label path hint v')
-        (keptFrom 0 i ++ .fresh (tree (path ++ [s]) (stepHint hint v' s x) x) :: keptFrom i (n - i))]
-    | none => [.replace (tree path hint v')]
+        (keptFrom 0 i ++ .fresh (tree hang (path ++ [s]) (stepHint hint v' s x) x) :: keptFrom i (n - i))]
+    | none => [.replace (tree hang path hint v')]
 
 /-- The kids kept, of those a test keeps. -/
 def keptWhere {α : Type} (keep : α → Bool) : List α → Nat → List (Tree.Source Label)
@@ -186,12 +194,12 @@ def keptWhere {α : Type} (keep : α → Bool) : List α → Nat → List (Tree.
 /-- The edits of a node's tree for a step taken away: the node's label and
 kids again, without the kid. -/
 def removeEdits (path : Path) (hint : Hint) (v v' : Value) (s : Step) : List (Tree.Edit Label) :=
-  if whole (shallow v) || whole (shallow v') then [.replace (tree path hint v')]
+  if whole (shallow v) || whole (shallow v') then [.replace (tree hang path hint v')]
   else
     match v, s with
     | .record fields, .key l => [.reshape (label path hint v') (keptWhere (·.1 != l) fields 0)]
     | .list items, .element p => [.reshape (label path hint v') (keptWhere (·.1 != p) items 0)]
-    | _, _ => [.replace (tree path hint v')]
+    | _, _ => [.replace (tree hang path hint v')]
 
 /-- A value after a write, with the edits that take its tree there; none
 where the write declines. It goes down the steps as the write does. A
@@ -199,37 +207,29 @@ record's kind set or taken away is the record's tree again: its fields are
 drawn by its kind. -/
 def rewrite (path : Path) (hint : Hint) (v : Value) :
     List Step → Option Value → Option (Value × List (Tree.Edit Label))
-  | [], some new => some (new, [.replace (tree path hint new)])
+  | [], some new => some (new, [.replace (tree hang path hint new)])
   | [], none => none
   | [s], some new =>
     (v.setStep s new).map fun v' =>
-      (v', if s == .key Kinds.isa then [.replace (tree path hint v')] else setEdits path hint v v' s new none)
+      (v', if s == .key Kinds.isa then [.replace (tree hang path hint v')]
+        else setEdits hang path hint v v' s new none)
   | [s], none =>
     (v.withoutStep s).map fun v' =>
-      (v', if s == .key Kinds.isa then [.replace (tree path hint v')] else removeEdits path hint v v' s)
+      (v', if s == .key Kinds.isa then [.replace (tree hang path hint v')]
+        else removeEdits hang path hint v v' s)
   | s :: r :: rest, w =>
     match v.step? s with
     | none => none
     | some c =>
       match rewrite (path ++ [s]) (stepHint hint v s c) c (r :: rest) w with
       | none => none
-      | some (c', es) => (v.setStep s c').map fun v' => (v', setEdits path hint v v' s c' (some es))
-
-/-- A value's tree, as an incremental function of the value under writes:
-it keeps the value. -/
-def treed (path : Path) (hint : Hint) : Cached Writes (runs (Tree.edits Label)) where
-  Cache := Value
-  f v := (tree path hint v, v)
-  df v d :=
-    match rewrite path hint v d.1 d.2 with
-    | some (v', es) => (es, v')
-    | none => ([], v)
+      | some (c', es) => (v.setStep s c').map fun v' => (v', setEdits hang path hint v v' s c' (some es))
 
 /-! ### The edits are right -/
 
 theorem fieldTrees_eq (path : Path) (hint : Hint) (kind : Option CellId) (fields : List (CellId × Value)) :
-    fieldTrees path hint kind fields =
-      fields.map fun f => tree (path ++ [.key f.1]) (fieldHint hint kind f.1 (emptied f.2)) f.2 := by
+    fieldTrees hang path hint kind fields =
+      fields.map fun f => tree hang (path ++ [.key f.1]) (fieldHint hint kind f.1 (emptied f.2)) f.2 := by
   induction fields with
   | nil => rfl
   | cons f rest ih =>
@@ -237,7 +237,7 @@ theorem fieldTrees_eq (path : Path) (hint : Hint) (kind : Option CellId) (fields
     simp [fieldTrees, ih]
 
 theorem itemTrees_eq (path : Path) (hint : Hint) (items : List (Position × Value)) :
-    itemTrees path hint items = items.map fun f => tree (path ++ [.element f.1]) hint f.2 := by
+    itemTrees hang path hint items = items.map fun f => tree hang (path ++ [.element f.1]) hint f.2 := by
   induction items with
   | nil => rfl
   | cons f rest ih =>
@@ -246,16 +246,16 @@ theorem itemTrees_eq (path : Path) (hint : Hint) (items : List (Position × Valu
 
 theorem tree_record (path : Path) (hint : Hint) (fields : List (CellId × Value))
     (h : whole (shallow (.record fields)) = false) :
-    tree path hint (.record fields) = .node (label path hint (.record fields))
+    tree hang path hint (.record fields) = .node (label path hint (.record fields))
       (fields.map fun f =>
-        tree (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2) := by
+        tree hang (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2) := by
   have leaf : (label path hint (.record fields)).leaf = false := h
   rw [tree]
   simp only [leaf, Bool.false_eq_true, ite_false, fieldTrees_eq]
 
 theorem tree_list (path : Path) (hint : Hint) (items : List (Position × Value)) :
-    tree path hint (.list items) = .node (label path hint (.list items))
-      (items.map fun f => tree (path ++ [.element f.1]) (itemHint hint) f.2) := by
+    tree hang path hint (.list items) = .node (label path hint (.list items))
+      (items.map fun f => tree hang (path ++ [.element f.1]) (itemHint hint) f.2) := by
   rw [tree, itemTrees_eq]
 
 theorem split_at {α : Type} (xs : List α) (i : Nat) (a : α) (h : xs[i]? = some a) :
@@ -469,9 +469,9 @@ of thing it was. -/
 theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : Value)
     (hset : v.setStep s x = some v') (hkind : v'.kind? = v.kind?) (inner : Option (List (Tree.Edit Label)))
     (hinner : ∀ es, inner = some es → ∃ c, v.step? s = some c ∧ emptied x = emptied c ∧
-      run (Tree.edits Label) es (tree (path ++ [s]) (stepHint hint v s c) c) =
-        tree (path ++ [s]) (stepHint hint v s c) x) :
-    run (Tree.edits Label) (setEdits path hint v v' s x inner) (tree path hint v) = tree path hint v' := by
+      run (Tree.edits Label) es (tree hang (path ++ [s]) (stepHint hint v s c) c) =
+        tree hang (path ++ [s]) (stepHint hint v s c) x) :
+    run (Tree.edits Label) (setEdits hang path hint v v' s x inner) (tree hang path hint v) = tree hang path hint v' := by
   unfold setEdits
   cases hw : whole (shallow v') with
   | true => rfl
@@ -490,9 +490,9 @@ theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : V
       | false =>
         simp only [Bool.false_eq_true, ite_false, Nat.add_zero] at h2 ⊢
         rw [h2]
-        have := set_between (fun f => tree (path ++ [.element f.1]) (itemHint hint) f.2)
+        have := set_between (fun f => tree hang (path ++ [.element f.1]) (itemHint hint) f.2)
           (label path hint (.list items)) (label path hint (.list (items.take i ++ (p, x) :: items.drop i)))
-          items i i h1 h1 (tree (path ++ [.element p]) (itemHint hint) x)
+          items i i h1 h1 (tree hang (path ++ [.element p]) (itemHint hint) x)
         show Tree.Edit.apply _ _ = _
         simpa [stepHint] using this
       | true =>
@@ -502,10 +502,10 @@ theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : V
         rw [h2]
         cases inner with
         | none =>
-          have := set_between (fun f => tree (path ++ [.element f.1]) (itemHint hint) f.2)
+          have := set_between (fun f => tree hang (path ++ [.element f.1]) (itemHint hint) f.2)
             (label path hint (.list items))
             (label path hint (.list (items.take i ++ (p, x) :: items.drop (i + 1))))
-            items i (i + 1) h1 hlt (tree (path ++ [.element p]) (itemHint hint) x)
+            items i (i + 1) h1 hlt (tree hang (path ++ [.element p]) (itemHint hint) x)
           show Tree.Edit.apply _ _ = _
           simpa [stepHint] using this
         | some es =>
@@ -524,7 +524,7 @@ theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : V
             simp only [label, labelOf, this, nr, Bool.false_eq_true, ite_false]
           have noreads : reads (shallow (.list (items.take i ++ (p, x) :: items.drop (i + 1)))) = false := rfl
           simp only [noreads, Bool.false_eq_true, ite_false, List.append_nil, hlab]
-          exact set_inner (fun f => tree (path ++ [.element f.1]) (itemHint hint) f.2) _ items i p c0 x hc es
+          exact set_inner (fun f => tree hang (path ++ [.element f.1]) (itemHint hint) f.2) _ items i p c0 x hc es
             (by simpa [stepHint] using hrun)
     · -- A record, a field set.
       rename_i fields l
@@ -535,10 +535,10 @@ theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : V
       | true => rfl
       | false =>
         simp only [Bool.false_eq_true, ite_false]
-        rw [tree_record _ _ _ hwv, tree_record _ _ _ hw, hkind]
+        rw [tree_record hang _ _ _ hwv, tree_record hang _ _ _ hw, hkind]
         generalize hT : (fun f : CellId × Value =>
-          tree (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2) = T
-        have hfresh : tree (path ++ [.key l]) (stepHint hint (.record (Value.setField fields l x)) (.key l) x) x =
+          tree hang (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2) = T
+        have hfresh : tree hang (path ++ [.key l]) (stepHint hint (.record (Value.setField fields l x)) (.key l) x) x =
             T (l, x) := by
           rw [← hT]
           simp only [stepHint, hkind]
@@ -600,7 +600,7 @@ theorem setEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (x : V
 after, if taking it away leaves the value's kind. -/
 theorem removeEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (hw : v.withoutStep s = some v')
     (hkind : v'.kind? = v.kind?) :
-    run (Tree.edits Label) (removeEdits path hint v v' s) (tree path hint v) = tree path hint v' := by
+    run (Tree.edits Label) (removeEdits hang path hint v v' s) (tree hang path hint v) = tree hang path hint v' := by
   unfold removeEdits
   cases hwh : (whole (shallow v) || whole (shallow v')) with
   | true => rfl
@@ -613,17 +613,17 @@ theorem removeEdits_ok (path : Path) (hint : Hint) (v v' : Value) (s : Step) (hw
       show Tree.Edit.apply _ _ = _
       rw [tree_list, tree_list]
       simp only [Tree.Edit.apply]
-      have := keptWhere_ok (fun f => tree (path ++ [.element f.1]) (itemHint hint) f.2)
+      have := keptWhere_ok (fun f => tree hang (path ++ [.element f.1]) (itemHint hint) f.2)
         (fun f : Position × Value => f.1 != p) items []
       simp only [List.length_nil, List.nil_append] at this
       rw [this]
     · rename_i fields l
       subst hw
       show Tree.Edit.apply _ _ = _
-      rw [tree_record _ _ _ hv, tree_record _ _ _ hv', hkind]
+      rw [tree_record hang _ _ _ hv, tree_record hang _ _ _ hv', hkind]
       simp only [Tree.Edit.apply]
       have := keptWhere_ok
-        (fun f => tree (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2)
+        (fun f => tree hang (path ++ [.key f.1]) (fieldHint hint (Value.record fields).kind? f.1 (emptied f.2)) f.2)
         (fun f : CellId × Value => f.1 != l) fields []
       simp only [List.length_nil, List.nil_append] at this
       rw [this]
@@ -638,8 +638,8 @@ theorem put_deep_eq (v : Value) (s r : Step) (rest : List Step) (w : Option Valu
 /-- Rewriting is right: it gives the value the write does, with edits that
 take the tree to that value's; and it declines where the write does. -/
 theorem rewrite_ok : ∀ (rel : List Step) (path : Path) (hint : Hint) (v : Value) (w : Option Value),
-    match rewrite path hint v rel w with
-    | some (v', es) => v.put rel w = some v' ∧ run (Tree.edits Label) es (tree path hint v) = tree path hint v'
+    match rewrite hang path hint v rel w with
+    | some (v', es) => v.put rel w = some v' ∧ run (Tree.edits Label) es (tree hang path hint v) = tree hang path hint v'
     | none => v.put rel w = none
   | [], _, _, _, some _ => ⟨rfl, rfl⟩
   | [], _, _, _, none => rfl
@@ -654,7 +654,7 @@ theorem rewrite_ok : ∀ (rel : List Step) (path : Path) (hint : Hint) (v : Valu
         rfl
       · have hb : (s == Step.key Kinds.isa) = false := by simpa using hs
         simp only [hb, Bool.false_eq_true, ite_false]
-        exact setEdits_ok path hint v v' s new h (kind_setStep v s new v' h hs) none (fun _ e => by cases e)
+        exact setEdits_ok hang path hint v v' s new h (kind_setStep v s new v' h hs) none (fun _ e => by cases e)
   | [s], path, hint, v, none => by
     simp only [rewrite]
     rcases h : v.withoutStep s with _ | v'
@@ -666,7 +666,7 @@ theorem rewrite_ok : ∀ (rel : List Step) (path : Path) (hint : Hint) (v : Valu
         rfl
       · have hb : (s == Step.key Kinds.isa) = false := by simpa using hs
         simp only [hb, Bool.false_eq_true, ite_false]
-        exact removeEdits_ok path hint v v' s h (kind_withoutStep v s v' h hs)
+        exact removeEdits_ok hang path hint v v' s h (kind_withoutStep v s v' h hs)
   | s :: r :: rest, path, hint, v, w => by
     simp only [rewrite]
     rw [put_deep_eq]
@@ -674,7 +674,7 @@ theorem rewrite_ok : ∀ (rel : List Step) (path : Path) (hint : Hint) (v : Valu
     | none => rfl
     | some c =>
       have ih := rewrite_ok (r :: rest) (path ++ [s]) (stepHint hint v s c) c w
-      rcases hr : rewrite (path ++ [s]) (stepHint hint v s c) c (r :: rest) w with _ | ⟨c', es⟩
+      rcases hr : rewrite hang (path ++ [s]) (stepHint hint v s c) c (r :: rest) w with _ | ⟨c', es⟩
       · simp only [hr] at ih ⊢
         simp [ih]
       · simp only [hr] at ih ⊢
@@ -684,24 +684,9 @@ theorem rewrite_ok : ∀ (rel : List Step) (path : Path) (hint : Hint) (v : Valu
         · simp only [Option.map_none]
         · simp only [Option.map_some]
           obtain ⟨_, nc, nc'⟩ := Value.put_other c r rest w c' hput
-          exact ⟨trivial, setEdits_ok path hint v v' s c' h (kind_setStep_deep v s c c' v' hs h nc nc') (some es)
+          exact ⟨trivial, setEdits_ok hang path hint v v' s c' h (kind_setStep_deep v s c c' v' hs h nc nc') (some es)
             fun es' e => by
               cases e
               exact ⟨c, hs, emptied_put c r rest w c' hput, hrun⟩⟩
-
-theorem treed_ok (path : Path) (hint : Hint) : (treed path hint).ok := by
-  intro v d
-  have h := rewrite_ok d.1 path hint v d.2
-  show (run (Tree.edits Label) _ (tree path hint v), _) = (tree path hint (v.written d.1 d.2), v.written d.1 d.2)
-  simp only [treed, Value.written]
-  cases hr : rewrite path hint v d.1 d.2 with
-  | none =>
-    rw [hr] at h
-    simp only [h, Option.getD_none]
-    rfl
-  | some made =>
-    obtain ⟨v', es⟩ := made
-    rw [hr] at h
-    simp only [h.1, Option.getD_some, h.2]
 
 end Progred.Derived

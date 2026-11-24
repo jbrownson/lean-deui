@@ -74,7 +74,9 @@ Read `README.md` first for what the repository is.
 - The view is being moved to `Progred/Derived/` (`docs/progred-port.md`
   says how far). A form there draws a node from its label alone and
   reads definitions only through `look`; a cell it reads is one of the
-  node's keys (`keys1`, `through`). `progred_derived` with the example
+  node's keys (`keys1`, `through`). What hangs under a cell is the
+  tree's to say (`Derived/Links.lean`), and a form reads only whether
+  something does. `progred_derived` with the example
   files says which parts it draws as the view as it is does: that count
   goes up, not down. With a number it times both.
 - `progred_measure` says what events cost; run it before and after a

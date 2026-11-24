@@ -313,6 +313,14 @@ the lines it would draw from nothing.
   from its whole value; a kind set is the record's tree again, since its
   fields are drawn by its kind. `rewrite_ok` says the edits take the tree
   to the tree of the value after, whatever order a record's fields are in.
+- **A cell drawn open has its definition's tree hung under it**
+  (`Derived/Links.lean`), and a parameter its definition's, of which its
+  type is drawn. So the tree is a function of the value, the definitions
+  and the folds. An edit of the definitions or the folds walks the tree
+  for its cells: one that opens or shuts, or whose definition is written,
+  has what hangs under it made again; one that stays as it is is walked
+  on into (`relinkCell`). `treed_ok` is the law of the tree under all
+  three.
 - `lines_ok` is the whole of it composed: the tree, its frames, the
   layout, the rows.
 
@@ -321,17 +329,16 @@ frame with what it saw before, and matches no kids by key. The one
 comparison left is the layout's, of tokens at the front and the end of a
 frame walked again (`Fit.mend`).
 
-Where it is: every form with nothing selected, but a cell drawn open and
-a parameter's type. On the example files the two draw the same wherever
-no cell is open: all of `projections.gid`, 12 of `tour.gid`'s 14 parts,
-9 of the 14 of the Rust version's `navigation.gid`. One thing is drawn
-otherwise on purpose: a record's name is bare wherever it's drawn, a
-layout's part too, where the view as it is draws that one in quotes.
+Where it is: every form, with nothing selected. On the example files the
+two draw every part the same: `tour.gid`, `projections.gid`, and the Rust
+version's twelve examples and four fixtures. One thing is drawn otherwise
+on purpose, which none of those has: a record's name is bare wherever
+it's drawn, a layout's part too, where the view as it is draws that one
+in quotes.
 
-Still to come, in order: cells drawn open and parameters' types, where a
-definition written is an edit of the tree; folds; the selection, typing
-and holes being filled, as context each node is stale to by its path;
-errors marked; then the editor's parts drawn this way, and
+Still to come, in order: the selection, typing and holes being filled, as
+context each node is stale to by its path; what evaluations gave, as an
+edit; errors marked; then the editor's parts drawn this way, and
 `Progred/Display.lean`'s forms, `Progred/Regrow.lean` and what a part
 reaches taken out.
 
@@ -340,14 +347,15 @@ On 300 entries, 3,300 lines, each edit made 20 times at different places
 
 | | one part: as it is | derived | a part an entry: as it is | derived |
 |---|---|---|---|---|
-| from nothing | 25 ms | 22 ms | 21 ms | 16 ms |
-| a text written | 2.5 ms | 0.45 ms | 45 µs | 18 µs |
-| an element added to a list | 2.5 ms | 0.5 ms | 75 µs | 41 µs |
-| a field added to a record | 2.5 ms | 0.5 ms | 57 µs | 25 µs |
-| an entry added | 2.7 ms | 0.9 ms | | |
-| a cell a tenth of the entries show, renamed | 30 ms | 5.7 ms | 2.7 ms | 1.7 ms |
-| a label every entry has, renamed | 35 ms | 41 ms | 23 ms | 9 ms |
-| a cell nothing shows, written | 2 µs | 0.8 ms | 0.3 ms | 1.2 ms |
+| from nothing | 25 ms | 21 ms | 22 ms | 18 ms |
+| a text written | 2.4 ms | 0.4 ms | 49 µs | 18 µs |
+| an element added to a list | 2.3 ms | 0.45 ms | 79 µs | 46 µs |
+| a field added to a record | 2.5 ms | 0.5 ms | 64 µs | 28 µs |
+| an entry added | 2.7 ms | 1 ms | | |
+| a definition a tenth of the entries show open, written | 30 ms | 6 ms | 4.3 ms | 3.8 ms |
+| a label every entry has, renamed | 31 ms | 38 ms | 32 ms | 10 ms |
+| a cell folded shut, another opened | 26 ms | 1 ms | | |
+| a cell nothing shows, written | 2 µs | 1 ms | 0.6 ms | 2.1 ms |
 
 What that says:
 
@@ -364,12 +372,16 @@ What that says:
   3,300 lines by walking to its place. Every stage after the layout keeps
   its lines that way, so many changes at once in one long part cost the
   part's length each, whoever makes them. A part an entry doesn't pay it.
-- A cell nothing shows costs a walk of every node to find that out: about
-  0.1 µs a node, more for a record of a kind, whose kind's definition is
-  looked up to ask what it names. As it is, a part keeps the cells it
-  asked for, and looks there. An index from cell to the nodes with that
-  key, kept as a function of the tree, would make it what the edit
-  touches.
+- A fold is the one cell made again, where the view as it is grows the
+  part again.
+- A definition written costs two walks of every node, whoever shows it:
+  one of the tree for its cells, one of the nodes for their keys, about
+  0.1 µs a node each. With a part an entry it's dearer still, 7 µs a
+  part: each part keeps the definitions three times over, for the tree,
+  the docs and the ribbon, and brings each copy up to date. As it is, a
+  part keeps the cells it asked for, and looks there. Keeping the
+  definitions once a part, and an index from cell to the nodes with that
+  key, kept as a function of the tree, are what would take that down.
 
 ## Where it stands against the Rust version
 

@@ -39,13 +39,38 @@ inductive Edit (L : Type) where
   | replace (t : Tree L)
   | kid (i : Nat) (e : Edit L)
   | reshape (label : L) (kids : List (Source L))
+  /-- Runs of edits, a run for each kid, in the kids' order: what many
+  `kid` edits come to, as one. -/
+  | each (runs : List (List (Edit L)))
 
+mutual
 def Edit.apply : Edit L → Tree L → Tree L
   | .replace t, _ => t
   | .kid i e, .node l kids => .node l (kids.modify i (Edit.apply e))
   | .reshape l sources, .node _ kids => .node l (sources.filterMap (Source.tree? kids))
+  | .each runs, .node l kids => .node l (Edit.applyEach runs kids)
+
+/-- A run of edits, applied in order. -/
+def Edit.applyRun : List (Edit L) → Tree L → Tree L
+  | [], t => t
+  | e :: es, t => Edit.applyRun es (Edit.apply e t)
+
+/-- Each kid with its run applied. -/
+def Edit.applyEach : List (List (Edit L)) → List (Tree L) → List (Tree L)
+  | es :: runs, k :: ks => Edit.applyRun es k :: Edit.applyEach runs ks
+  | _, ks => ks
+end
 
 abbrev edits (L : Type) : EditStructure := ⟨Tree L, Edit L, Edit.apply⟩
+
+theorem Edit.applyRun_eq : ∀ (es : List (Edit L)) (t : Tree L), Edit.applyRun es t = run (edits L) es t
+  | [], _ => rfl
+  | e :: es, t => by
+    rw [Edit.applyRun]
+    exact Edit.applyRun_eq es (Edit.apply e t)
+
+theorem Edit.applyEach_nil (ks : List (Tree L)) : Edit.applyEach [] ks = ks := by
+  cases ks <;> rfl
 
 /-- A run of edits of one kid. -/
 theorem run_kid (l : L) (pre : List (Tree L)) (x : Tree L) (post : List (Tree L)) (es : List (Edit L)) :
@@ -96,6 +121,7 @@ def Source.frame (own : L → Fit.Doc S) (n : Nat) : Source L → Option (Fit.So
   | .kept j => if j < n then some (.kept j) else none
   | .fresh t => some (.fresh (Tree.frame own t))
 
+mutual
 /-- An edit of a tree, as the edit of its frames: the same, node for node.
 It takes the tree as it was for how many kids each node had. -/
 def Edit.frame (own : L → Fit.Doc S) : Edit L → Tree L → Fit.Edit S
@@ -105,6 +131,17 @@ def Edit.frame (own : L → Fit.Doc S) : Edit L → Tree L → Fit.Edit S
     | some k => .kid i (Edit.frame own e k)
     | none => .kid i (.replace (.node (.row []) []))
   | .reshape l sources, .node _ kids => .reshape (own l) (sources.filterMap (Source.frame own kids.length))
+  | .each runs, .node _ kids => .each (Edit.frameEach own runs kids)
+
+/-- A run of edits, each as the edit of the frames of the tree it finds. -/
+def Edit.frameRun (own : L → Fit.Doc S) : List (Edit L) → Tree L → List (Fit.Edit S)
+  | [], _ => []
+  | e :: es, t => Edit.frame own e t :: Edit.frameRun own es (Edit.apply e t)
+
+def Edit.frameEach (own : L → Fit.Doc S) : List (List (Edit L)) → List (Tree L) → List (List (Fit.Edit S))
+  | es :: runs, k :: ks => Edit.frameRun own es k :: Edit.frameEach own runs ks
+  | _, _ => []
+end
 
 theorem modify_map {α β : Type} (f : α → β) (g : β → β) (h : α → α) :
     ∀ (xs : List α) (i : Nat), (∀ x, xs[i]? = some x → g (f x) = f (h x)) →
@@ -115,6 +152,7 @@ theorem modify_map {α β : Type} (f : α → β) (g : β → β) (h : α → α
     simp only [List.map_cons, List.modify_succ_cons]
     rw [modify_map f g h xs i fun y hy => hx y (by simpa using hy)]
 
+mutual
 /-- An edit of the tree is the same edit of its frames. -/
 theorem Edit.frame_ok (own : L → Fit.Doc S) : ∀ (e : Edit L) (t : Tree L),
     Fit.Edit.apply (e.frame own t) (Tree.frame own t) = Tree.frame own (e.apply t)
@@ -147,6 +185,28 @@ theorem Edit.frame_ok (own : L → Fit.Doc S) : ∀ (e : Edit L) (t : Tree L),
         by_cases hj : j < kids.length
         · simp [Source.frame, Source.tree?, Fit.Source.frame, hj, ih]
         · simp [Source.frame, Source.tree?, hj, ih]
+  | .each runs, .node l kids => by
+    simp only [Edit.apply, Edit.frame, frame_node, Fit.Edit.apply]
+    rw [Edit.frameEach_ok own runs kids]
+
+theorem Edit.frameRun_ok (own : L → Fit.Doc S) : ∀ (es : List (Edit L)) (t : Tree L),
+    Fit.Edit.applyRun (Edit.frameRun own es t) (Tree.frame own t) = Tree.frame own (Edit.applyRun es t)
+  | [], _ => rfl
+  | e :: es, t => by
+    simp only [Edit.frameRun, Fit.Edit.applyRun, Edit.applyRun]
+    rw [Edit.frame_ok own e t]
+    exact Edit.frameRun_ok own es (Edit.apply e t)
+
+theorem Edit.frameEach_ok (own : L → Fit.Doc S) : ∀ (runs : List (List (Edit L))) (ks : List (Tree L)),
+    Fit.Edit.applyEach (Edit.frameEach own runs ks) (ks.map (Tree.frame own)) =
+      (Edit.applyEach runs ks).map (Tree.frame own)
+  | [], ks => by
+    cases ks <;> simp [Edit.frameEach, Edit.applyEach, Fit.Edit.applyEach]
+  | es :: runs, [] => by simp [Edit.frameEach, Edit.applyEach, Fit.Edit.applyEach]
+  | es :: runs, k :: ks => by
+    simp only [Edit.frameEach, Edit.applyEach, List.map_cons, Fit.Edit.applyEach]
+    rw [Edit.frameRun_ok own es k, Edit.frameEach_ok own runs ks]
+end
 
 /-- A tree's frames, as an incremental function of the tree. -/
 def framed (own : L → Fit.Doc S) : Inc (edits L) (runs (Fit.edits S)) :=

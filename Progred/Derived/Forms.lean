@@ -1,5 +1,4 @@
-import Progred.Derived.Tree
-import Progred.Model
+import Progred.Derived.Links
 
 /-!
 A node's own doc, for the view drawn by derivative: every form, drawn from
@@ -13,7 +12,7 @@ the cells their definitions name. So a definition written draws again the
 nodes with that key, and that needs no proof form by form.
 
 Not here yet: the selection (typing, holes being filled, fields being
-added), cells drawn open, parameters' types, folds, errors marked.
+added), errors marked.
 -/
 
 open Deui
@@ -75,8 +74,11 @@ def ordered (fields : List (CellId × Value)) : List (CellId × Value) :=
   let unnamed := withNames.filter (·.1.isNone)
   ((named.toArray.qsort (fun a b => a.1.getD "" < b.1.getD "")).toList ++ unnamed).map (·.2)
 
-/-- A cell, closed: its name, or its kind and short id. -/
-def cell (c : CellId) : Doc :=
+/-- A cell: open, its definition, hung under it, in parentheses; closed,
+its name, or its kind and short id. -/
+def cell (opened : Bool) (c : CellId) : Doc :=
+  if opened then .row [delim "(", .slot 0, delim ")"]
+  else
   match name? look c with
   | some n => t n .name
   | none =>
@@ -223,7 +225,7 @@ def projection (layouts : List (Value × Value × Value)) (k : CellId) (v : Valu
 /-- A value, by the first form that takes it. -/
 def drawn (around : Around) (l : Label) : Doc :=
   match l.value with
-  | .cell c => cell look c
+  | .cell c => cell look l.opened c
   | .blob b => t (GidText.hex b) .number
   | .list items => list l.path items
   | .record fields =>
@@ -265,7 +267,8 @@ def shape (around : Around) (l : Label) : Doc :=
     | none => occ l.path .hole (dim missing)
   | .param =>
     match l.value with
-    | .cell c => occ l.path .value (.row [t (shown look c) .name, .row []]) (some c)
+    | .cell c =>
+      occ l.path .value (.row [t (shown look c) .name, if l.opened then .slot 0 else .row []]) (some c)
     | _ => value look around l
   | .entries =>
     match l.value with
@@ -283,7 +286,14 @@ def shape (around : Around) (l : Label) : Doc :=
   | .end_ => occ Display.entriesPath .entryPoint (point .ink)
   | .label => .row []
   | .params => value look around l
-  | .paramType => value look around l
+  | .paramType =>
+    -- A parameter's definition, as its type: drawn if it has one.
+    match l.value with
+    | .record fields =>
+      match slotOf fields Kinds.type_ with
+      | some i => .row [dim ": ", .slot i]
+      | none => .row []
+    | _ => .row []
 
 end forms
 
@@ -331,46 +341,20 @@ def keys2 (l : Label) (look : CellId → Option Value) : List CellId :=
 
 /-! ## Under the definitions -/
 
-abbrev Cells := Std.TreeMap CellId Value
-
-abbrev cellsEdits : EditStructure := ⟨Cells, Model.CellsEdit, Model.CellsEdit.apply⟩
-
-/-- What a part is drawn under: the ribbon, and the definitions. -/
-abbrev Under : EditStructure := prod (latest Nat) (runs cellsEdits)
-
-/-- The library's definitions, by cell. -/
-def table : Cells := Builtin.library.foldr (fun (c, v) m => m.insert c v) {}
-
-/-- A cell's definition: the document's, else the library's. -/
-def get (u : Under.Value) (c : CellId) : Option Value := (u.2[c]?).orElse fun _ => table[c]?
-
-/-- Whether an edit of the definitions writes a cell. -/
-def writes (c : CellId) : Model.CellsEdit → Bool
-  | .set x _ => x == c
-  | .all _ => true
+/-- A cell's definition, under what a part is drawn under. -/
+def get (u : Under.Value) (c : CellId) : Option Value := lookup u.2 c
 
 def touches (d : Under.Edit) (c : CellId) : Bool := d.2.any (writes c)
 
+/-- An edit that writes no definition changes no doc: the folds reach the
+docs only through the tree. -/
 def calm (d : Under.Edit) : Bool := d.2.isEmpty
 
 /-- A cell no edit of a run writes has the definition it had. -/
 theorem get_untouched (u : Under.Value) (d : Under.Edit) (c : CellId) (h : touches d c = false) :
     get (Under.apply d u) c = get u c := by
-  obtain ⟨r, cells⟩ := u
-  obtain ⟨r', ces⟩ := d
-  show ((run cellsEdits ces cells)[c]?).orElse _ = (cells[c]?).orElse _
-  simp only [touches] at h
-  induction ces generalizing cells with
-  | nil => rfl
-  | cons ce rest ih =>
-    simp only [List.any_cons, Bool.or_eq_false_iff] at h
-    show ((run cellsEdits rest (Model.CellsEdit.apply ce cells))[c]?).orElse _ = _
-    rw [ih _ h.2]
-    cases ce with
-    | all new => simp [writes] at h
-    | set x v =>
-      have ne : c ≠ x := fun e => by simp [writes, e] at h
-      simp only [Model.CellsEdit.apply, Model.defined_other cells x v c ne]
+  show ((run cellsEdits d.2 u.2)[c]?).orElse _ = (u.2[c]?).orElse _
+  rw [cells_untouched d.2 u.2 c h]
 
 /-- A node's own doc, under the definitions: it reads them through its
 keys. -/
@@ -404,11 +388,11 @@ abbrev Lines : EditStructure := runs (Lists.editStructure (Deui.whole (plain Lin
 
 /-- The frames of a value at a path, drawn as its place asks. -/
 def framed (around : Around) (path : Path) (hint : Hint) : Cached (prod Under (runs Writes)) Framed :=
-  Cached.carrying (·.1) (compose (Cached.second (Cached.lift (treed path hint))) (cached (drawn' around)))
+  Cached.carrying (·.1.1) (compose (Cached.keeping (treed path hint)) (cached (drawn' around)))
 
 theorem framed_ok (around : Around) (path : Path) (hint : Hint) : (framed around path hint).ok :=
   Cached.carrying_ok _ _
-    (compose_ok _ _ (Cached.second_ok _ (Cached.lift_ok _ (treed_ok path hint))) (cached_ok _ (drawn'_ok around)))
+    (compose_ok _ _ (Cached.keeping_ok _ (treed_ok path hint)) (cached_ok _ (drawn'_ok around)))
 
 /-- Its lines. -/
 def lines (around : Around) (path : Path) (hint : Hint) : Cached (prod Under (runs Writes)) Lines :=

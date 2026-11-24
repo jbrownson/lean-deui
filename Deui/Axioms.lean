@@ -79,3 +79,9 @@ new axiom. -/
 
 /-- info: 'Deui.Tree.reading_touched' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Tree.reading_touched
+
+/-- info: 'Deui.Tree.reading2_touched' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Tree.reading2_touched
+
+/-- info: 'Deui.Cached.keeping_ok' does not depend on any axioms -/
+#guard_msgs in #print axioms Deui.Cached.keeping_ok
