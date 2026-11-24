@@ -177,34 +177,39 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   append, length, map, filter, fold, range, show (`Progred/Builtin.lean`).
 - **Monospace text.** Layout is in characters: a doc chooses its inline or its
   stacked form against a ribbon, as the Rust layout's alternatives do.
-- **The model's edits say what changed.** An edit is a cell's definition,
-  written or taken away; all the definitions; or the rest, which is everything
-  but the definitions. A handler still works on the model, as a function from
-  model to model, and notes the cells it writes; its edits are those cells'
-  definitions, then the rest (`Model.emitted`). The state the app holds is
-  those edits applied, so a cell written without being noted keeps its old
-  definition there: `Model.write` takes the path written at for that.
+- **The model's edits say what changed, and nothing is compared to find it.**
+  What the view reads of the model is changed only by a `Change`, which the
+  model notes: a cell's definition; an entry of the root notebook written,
+  added or taken away, by where it is among the entries; the root or the
+  document whole; the selection, the folds, what Lean gave, the scroll, the
+  window's size. A handler is still a function from model to model; its edits
+  are the changes it noted, then the rest, which is all the view doesn't read
+  (`Model.emitted`). So the state the app holds is the model the handler made.
+  `Model.write` takes the path a document was written at and works out which
+  change that is.
 - **The view is a derivative, and each step is sensitive to what it reads**
-  (`Progred/Editor.lean`). The root's entries are compared with what they
-  were, while the root isn't the same object. Each entry becomes an item: what
-  it reaches, its evaluations, and every cell it asked for on the way, defined
-  or not. An edit that writes a definition is asked of each item, and only one
-  that asked for that cell is worked out again: `reach_agree` says two tables
-  of definitions that agree on the cells asked for give the same, and
-  `defined_other` that writing one definition leaves the others. Each item
-  becomes a part's input: the item, its slot (its number and the places to add
-  an entry beside it, by its position), and what of the editor's state it's
-  drawn with, restricted to it. A change of that is asked of each part, and
-  only one whose restriction differs gets a new input, so a selection that
-  moves touches the parts it leaves and enters. A part is laid out where its
-  input changed; its lines are compared with what they were; the window shows
-  the lines that fit; and each line that changed is a row of the scene
-  replaced. Every step is one of deui's, proved, and `view_ok` is their laws
-  composed. Equality is decided through `withPtrEqDecEq`: a value that's one
-  object in both is equal at once.
-- **An entry being added is a line of the part beside it,** with no number
-  until it's there, so opening the place for one changes one part and
-  renumbers nothing.
+  (`Progred/Editor.lean`). The model's edits are sorted by what they're asked
+  of: the definitions written, and the document's parts, where an entry
+  written is its part replaced and one added or taken away is a part inserted
+  or deleted (`Progred/Entries.lean`, `edits_ok`). Each part becomes an item:
+  what it reaches, its evaluations, and every cell it asked for on the way,
+  defined or not. An edit that writes a definition is asked of each item, and
+  only one that asked for that cell is worked out again: `reach_agree` says
+  two tables of definitions that agree on the cells asked for give the same,
+  and `defined_other` that writing one definition leaves the others. Each item
+  becomes a part's input: the item, and what of the editor's state it's drawn
+  with, restricted to it. A change of that is asked of each part, and only one
+  whose restriction differs gets a new input, so a selection that moves touches
+  the parts it leaves and enters. A part is laid out where its input changed,
+  and its lines replace the ones it had; the window shows the lines that fit;
+  and each is a row of the scene. Every step is one of deui's, proved, and
+  `view_ok` is their laws composed.
+- **A part takes nothing from the parts beside it.** An entry being added is
+  anchored to the entry it's before, or to the entries' end, and that part
+  draws it. The place to add an entry is before each entry and at the end, and
+  its position is worked out when it's chosen, from the document. Entries have
+  no numbers: a number is the one thing every later entry would take from an
+  entry added before it.
 - **Handlers read what the view keeps.** Navigation and clicks use the layout
   the view kept for the model (`laidOf_view`), and where an edit needs the
   layout of a model it's passing through, the same derivative gives it, of the
@@ -263,10 +268,9 @@ the window was driven under Xvfb):
   in place.
 - The view by derivative. `progred_measure`, on a notebook of 3,300 lines in
   300 entries, a tenth of which reach each of ten definitions: the wheel about
-  12 µs, a keystroke 0.3 ms, an arrow key 0.3 to 1.5 ms, a definition written
-  7 ms with 68 scene edits, against 16 ms to lay it out from nothing. At
-  33,000 lines in 3,000 entries: 0.1 ms, 3.5 ms, up to 11 ms, and 53 ms,
-  against 173 ms.
+  12 µs, a keystroke 0.5 ms, an arrow key up to 0.8 ms, a definition written
+  2 ms, against 16 ms to lay it out from nothing. At 33,000 lines in 3,000
+  entries: 0.07 ms, 3 ms, 11 ms and 61 ms, against 174 ms.
 
 Not here yet:
 
@@ -282,19 +286,25 @@ Not here yet:
 - New and Open; a mark that the document has unsaved changes.
 - CAM, Fidget, the web and macOS targets.
 - What the view still does in proportion to the document. Its lists are
-  linked lists, so an edit at a position costs the position: finding the
-  entry, patching each step's list, counting the rows above the window. That's
-  the few milliseconds a keystroke takes among 3,000 entries, and it's why an
-  edit that lays out more than `manyParts` parts draws the window afresh. A
-  sequence held as a tree would make these the logarithm. A part is still
-  laid out whole when anything it reads changes: an entry that reaches a
+  linked lists, so an edit at a position costs the position: patching each
+  step's list, counting the rows above the window. That's the few milliseconds
+  a keystroke takes among 3,000 entries, and it's why an edit that lays out
+  more than one part draws the window's lines afresh. A sequence held as a
+  tree would make these the logarithm. A part is laid out whole when anything
+  it reads changes, and all its lines are new: an entry that reaches a
   definition is laid out again when it's written, though it may show only its
   name; and a root that isn't a notebook is one part (the Rust version's own
-  example files, whose roots are its panes, are like that here). Reading by
-  the cell inside a layout, as items do, is the way on from here. A function
-  projection's results go to every part that has such a kind.
-- Nothing checks that a handler notes every cell it writes; the state follows
-  the edits, so a missed one shows as a write that didn't take.
+  example files, whose roots are its panes, are like that here). A derivative
+  of a part's layout, reading by the cell as items do, is the way on from
+  here. A function projection's results go to every part that has such a kind.
+- Where a part is still asked by comparing: a change of the selection, the
+  folds or what Lean gave is asked of each part by whether what the part
+  takes of it differs, not by a rule read off the change. It's a small value
+  compared once a part; a rule for each kind of change would do without.
+- Entry numbers, which the Rust version shows in a margin.
+- Nothing checks that a handler changes what the view reads only through
+  `change`; the state follows the edits, so a field set directly shows as a
+  change that didn't take.
 - Laws about Progred beyond its view: `view_ok` says the scene on screen is
   the view of the model, and nothing says the editing is right. What runs
   outside the pure update (Lean, the files, the clipboard) isn't in any law,
