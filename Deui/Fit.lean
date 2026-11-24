@@ -768,6 +768,41 @@ theorem Kept.relay_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (e : 
       rw [hold]
       exact Takes.whole _ _
 
+/-! ## Edits of kids -/
+
+theorem modify_append_cons {α : Type} (pre : List α) (x : α) (post : List α) (f : α → α) :
+    (pre ++ x :: post).modify pre.length f = pre ++ f x :: post := by
+  induction pre with
+  | nil => rfl
+  | cons y ys ih => simp [List.modify_succ_cons, ih]
+
+/-- A run of edits of one kid. -/
+theorem run_kid (doc : Doc S) (pre : List (Frame S)) (x : Frame S) (post : List (Frame S)) (es : List (Edit S)) :
+    run (edits S) (es.map (.kid pre.length)) (.node doc (pre ++ x :: post)) =
+      .node doc (pre ++ run (edits S) es x :: post) := by
+  induction es generalizing x with
+  | nil => rfl
+  | cons e es ih =>
+    show run (edits S) (es.map (.kid pre.length)) (Edit.apply (.kid pre.length e) (.node doc (pre ++ x :: post))) = _
+    simp only [Edit.apply, modify_append_cons]
+    exact ih (Edit.apply e x)
+
+/-- Each kid's own run of edits, one kid after another, takes a frame's
+kids each to what its run makes of it. -/
+theorem run_kids {α : Type} (doc : Doc S) (old new : α → Frame S) (es : α → List (Edit S)) :
+    ∀ (xs : List α) (pre : List (Frame S)), (∀ x ∈ xs, run (edits S) (es x) (old x) = new x) →
+      run (edits S) ((xs.zipIdx pre.length).flatMap fun p => (es p.1).map (.kid p.2))
+          (.node doc (pre ++ xs.map old)) =
+        .node doc (pre ++ xs.map new)
+  | [], _, _ => rfl
+  | x :: xs, pre, h => by
+    simp only [List.zipIdx_cons, List.flatMap_cons, List.map_cons]
+    rw [run_append, run_kid, h x (List.mem_cons_self ..)]
+    have ih := run_kids doc old new es xs (pre ++ [new x]) fun y hy => h y (List.mem_cons_of_mem _ hy)
+    simp only [List.length_append, List.length_cons, List.length_nil, Nat.zero_add, List.append_assoc,
+      List.cons_append, List.nil_append] at ih
+    exact ih
+
 /-! ## Fitting, as an incremental function -/
 
 /-- A kept frame after a run of edits. -/

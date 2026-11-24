@@ -13,8 +13,8 @@ namespace Progred.Entries
 
 open Progred Deui Display
 
-/-- The parts' edit structure: a part is replaced whole. -/
-abbrev Parts : EditStructure := runs (whole (plain Entry))
+/-- The parts' edit structure: a part is replaced, or written within. -/
+abbrev Parts : EditStructure := runs Entry.edits
 
 def part (x : Position × Value) : Entry := .entry x.1 x.2
 
@@ -134,6 +134,37 @@ theorem replaceAt_map (items : List (Position × Value)) (i : Nat) (v : Value) (
       simp only [Model.replaceAt, List.map, List.cons_append, Lists.update]
       exact congrArg (_ :: ·) (ih i h)
 
+theorem writtenAt_map (items : List (Position × Value)) (i : Nat) (rel : List Step) (w : Option Value)
+    (tail : List Entry) :
+    (Model.writtenAt items i rel w).map part ++ tail =
+      Lists.update Parts (items.map part ++ tail) i [.write rel w] ∨ items[i]? = none := by
+  induction items generalizing i with
+  | nil => exact Or.inr rfl
+  | cons y t ih =>
+    cases i with
+    | zero =>
+      cases y
+      exact Or.inl rfl
+    | succ i =>
+      cases y
+      rcases ih i with h | h
+      · refine Or.inl ?_
+        simp only [Model.writtenAt, List.map, List.cons_append, Lists.update]
+        exact congrArg (_ :: ·) h
+      · exact Or.inr (by simpa using h)
+
+theorem writtenAt_none (items : List (Position × Value)) (i : Nat) (rel : List Step) (w : Option Value)
+    (h : items[i]? = none) : Model.writtenAt items i rel w = items := by
+  induction items generalizing i with
+  | nil => rfl
+  | cons y t ih =>
+    cases i with
+    | zero => simp at h
+    | succ i =>
+      simp only [List.getElem?_cons_succ] at h
+      cases y
+      simp only [Model.writtenAt, ih i h]
+
 theorem replaceAt_none (items : List (Position × Value)) (i : Nat) (v : Value) (h : items[i]? = none) :
     Model.replaceAt items i v = items := by
   induction items generalizing i with
@@ -156,6 +187,18 @@ def edits (m : Model) : Model.Edit → List (Lists.Edit.of Parts)
       | some x => [.update i [.replace (.entry x.1 v)]]
       | none => []
     | none => []
+  | .change (.entryAt i rel w) =>
+    match notebookEntries? m.doc.root with
+    | some items =>
+      match items[i]? with
+      | some _ => [.update i [.write rel w]]
+      | none => []
+    | none => []
+  | .change (.rootAt rel w) =>
+    -- A root that isn't a notebook, before or after, is the one part written.
+    match notebookEntries? m.doc.root, notebookEntries? (m.doc.root.map fun v => v.written rel w) with
+    | none, none => [.update 0 [.write rel w]]
+    | _, _ => Lists.diff Parts (entries m.doc.root) (entries (m.doc.root.map fun v => v.written rel w))
   | .change (.entryIn i p v) =>
     match notebookEntries? m.doc.root with
     | some items => [.insert (min i items.length) (.entry p v)]
@@ -187,6 +230,31 @@ theorem edits_ok (m : Model) (e : Model.Edit) :
         | some x =>
           simp only [edits, hn, hi]
           exact (replaceAt_map items i v x hi [.end_]).symm
+    | entryAt i rel w =>
+      show Lists.patch Parts (edits m (.change (.entryAt i rel w))) (entries m.doc.root) =
+        entries (Model.entriesChanged m.doc.root fun items => Model.writtenAt items i rel w)
+      cases hn : notebookEntries? m.doc.root with
+      | none => simp only [edits, hn, entries_unchanged _ _ hn]; rfl
+      | some items =>
+        rw [entries_changed _ items _ hn, entries_some _ _ hn]
+        cases hi : items[i]? with
+        | none => simp only [edits, hn, hi, writtenAt_none items i rel w hi]; rfl
+        | some x =>
+          simp only [edits, hn, hi]
+          rcases writtenAt_map items i rel w [.end_] with h | h
+          · exact h.symm
+          · rw [hi] at h; cases h
+    | rootAt rel w =>
+      show Lists.patch Parts (edits m (.change (.rootAt rel w))) (entries m.doc.root) =
+        entries (m.doc.root.map fun v => v.written rel w)
+      cases hn : notebookEntries? m.doc.root with
+      | some items => simp only [edits, hn]; exact Lists.diff_ok Parts _ _
+      | none =>
+        cases hn' : notebookEntries? (m.doc.root.map fun v => v.written rel w) with
+        | some items => simp only [edits, hn, hn']; exact Lists.diff_ok Parts _ _
+        | none =>
+          simp only [edits, hn, hn', entries_none _ hn, entries_none _ hn']
+          rfl
     | entryIn i p v =>
       show Lists.patch Parts (edits m (.change (.entryIn i p v))) (entries m.doc.root) =
         entries (Model.entriesChanged m.doc.root fun items => Lists.insert items (min i items.length) (p, v))

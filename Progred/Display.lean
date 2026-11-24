@@ -170,11 +170,12 @@ def shallow : Value → Value
   | .record fields => .record (fields.map fun (l, v) => (l, emptied v))
   | v => v
 
-/-- The selection, as a frame sees it: only if it's at the frame or under
-it, and with what's being typed only where it's typed. Elsewhere a frame
-sees that something is typed, and no more. -/
+/-- The selection, as a frame sees it: only if it's at the frame or one
+step in, and with what's being typed only where it's typed. Elsewhere a
+frame sees that something is typed, and no more; and a frame further up
+sees nothing of it. -/
 def seen (sel : Selection) (path : Path) (hint : Hint) : Option Selection :=
-  if path.isPrefixOf sel.path then
+  if sel.path == path || sel.path.dropLast == path then
     some { sel with editing :=
       if sel.path == path && hint.listens sel.stage then sel.editing
       else sel.editing.map fun e => { text := "", caret := 0, picker := e.picker } }
@@ -371,11 +372,23 @@ to the record at a path: a kid at the record's own path. -/
 def newLabel (path : Path) : B (List Doc) := do
   if (editingAt s path .label).isSome then return [← kidHere errors .label] else return []
 
+/-- The field whose value is being given, if the selection is pending at a
+field the record at a path doesn't have yet: its label, and the hole. -/
+def pendingField (path : Path) (fields : List (CellId × Value)) : B (List Doc) := do
+  match s.selection with
+  | some sel =>
+    if sel.stage == .pending && sel.path.dropLast == path then
+      match sel.path.getLast? with
+      | some (.key l) => if fields.any (·.1 == l) then return [] else return [← field s errors path l]
+      | _ => return []
+    else return []
+  | none => return []
+
 /-- A raw record: `{label: value, …}`, with a place at its end to add a
 field. -/
 def record (path : Path) (fields : List (CellId × Value)) : B Doc := do
   let shown ← (ordered s fields).mapM fun (l, _) => field s errors path l (plain := true)
-  let adding ← newLabel s errors path
+  let adding := (← pendingField s errors path fields) ++ (← newLabel s errors path)
   let end_ := if adding.isEmpty then [occ errors path .fieldEnd (point .ink)] else []
   let parts := shown ++ adding
   let flat : Doc := .row ([delim "{"] ++ Doc.sep (dim ", ") parts ++ end_ ++ [delim "}"])
@@ -405,7 +418,9 @@ def kinded (path : Path) (k : CellId) (fields : List (CellId × Value)) : B Doc 
     l != Kinds.isa && l != Kinds.name && !declared.contains l
   let slots ← declared.mapM fun l => field s errors path l
   let others ← rest.mapM fun (l, _) => field s errors path l
-  let adding ← newLabel s errors path
+  let pending ← if declared.any (fun l => s.selection.any fun sel => sel.path == path ++ [.key l]) then pure []
+    else pendingField s errors path fields
+  let adding := pending ++ (← newLabel s errors path)
   let parts := slots ++ others ++ adding
   let name ← if hasName then pure [t " ", ← nameOf errors "name"] else pure []
   let head := [t (s.doc.shown s.library k) .name] ++ name
@@ -488,7 +503,11 @@ def call (path : Path) (v : Value) : B Doc := do
           l != Kinds.isa && l != Kinds.function && !params.contains l
       | _ => []
     let others ← extra.mapM fun (l, _) => field s errors path l
-    let adding ← newLabel s errors path
+    let pending ← if params.any (fun l => s.selection.any fun sel => sel.path == path ++ [.key l]) then pure []
+      else match v with
+        | .record fields => pendingField s errors path fields
+        | _ => pure []
+    let adding := pending ++ (← newLabel s errors path)
     let parts := args ++ others ++ adding
     let flat : Doc := .row ([head, delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
     let stacked : Doc := .col [.row [head, delim " {"], .indent 2 (.col parts), delim "}"]
@@ -565,16 +584,20 @@ def nameShape (path : Path) (v? : Option Value) (missing : String) : Doc :=
     | some n => if n.isEmpty then occ errors path .value (dim missing) else occ errors path .value (bare none n)
     | none => occ errors path .hole (dim missing)
 
-/-- A parameter: its name, and its type if it has one, or one is being
-given. -/
+/-- A parameter: its name, and its definition, a kid, of which its type
+is drawn. -/
 def paramShape (path : Path) (v? : Option Value) (deep : Deep) : B Doc := do
   match v?, editingAt s path .edge with
   | some (.cell c), none =>
-    let typePath := path ++ [.follow, .key Kinds.type_]
-    let type := (s.doc.lookup? s.library c).bind (·.field? Kinds.type_)
-    let typed ← if type.isSome || pendingAt s typePath then pure [dim ": ", ← kid errors .follow .paramType] else pure []
-    return occ errors path .value (.row (t (s.doc.shown s.library c) .name :: typed)) (some c)
+    return occ errors path .value (.row [t (s.doc.shown s.library c) .name, ← kid errors .follow .paramType]) (some c)
   | _, _ => value s errors path v? false deep
+
+/-- A parameter's definition, as its type: drawn if it has one, or one is
+being given. -/
+def paramTypeShape (path : Path) (v? : Option Value) : B Doc := do
+  if ((v?.bind (·.field? Kinds.type_)).isSome || pendingAt s (path ++ [.key Kinds.type_])) then
+    return .row [dim ": ", ← kid errors (.key Kinds.type_)]
+  else return .row []
 
 /-- A lambda's parameters: each drawn as a parameter, unless the list is
 being replaced. -/
@@ -661,7 +684,7 @@ def Display.shape (s : Shown) (path : Path) (hint : Hint) (errors : List Path) (
     | .value plain => value s errors path v plain deep
     | .name missing => pure (nameShape s errors path v missing)
     | .param => paramShape s errors path v deep
-    | .paramType => kid errors (.key Kinds.type_)
+    | .paramType => paramTypeShape s errors path v
     | .params => paramsShape s errors path v deep
     | .entries => entriesShape s errors path v deep
     | .body => bodyShape s errors path v deep
@@ -700,11 +723,15 @@ def Seed.kid (s : Shown) (seed : Seed) (k : Kid) : Seed :=
         | _ => none
       | some step => seed.value.bind (·.step? step) }
 
+/-- What a frame sees of the selection. -/
+def sees (s : Shown) (seed : Seed) : Option Selection :=
+  s.selection.bind fun sel => seen sel seed.path seed.hint
+
 /-- A frame's doc and kids, for a seed: drawn from the selection as it's
 seen there, and the value without what's inside it. -/
 def framed (s : Shown) (seed : Seed) : Doc × List Kid :=
-  shape { s with selection := s.selection.bind fun sel => seen sel seed.path seed.hint } seed.path seed.hint
-    seed.errors (deepOf s seed.value) (seed.value.map shallow)
+  shape { s with selection := sees s seed } seed.path seed.hint seed.errors (deepOf s seed.value)
+    (seed.value.map shallow)
 
 /-- The frames of a seed: its own, and its kids', as deep as `fuel`. -/
 def grow (s : Shown) : Nat → Seed → Deui.Fit.Frame Span
@@ -875,6 +902,11 @@ def item (look : CellId → Option Value) (e : Entry) : Item :=
   | some v => itemOf look e v
   | none => ⟨e, ⟨[]⟩, [], false, []⟩
 
+/-- An item is of the part it was made from. -/
+theorem item_entry (look : CellId → Option Value) (e : Entry) : (item look e).entry = e := by
+  unfold item
+  cases e.value? <;> rfl
+
 /-- A part is the same by two tables that agree on the cells it asked for. -/
 theorem item_agree (look look' : CellId → Option Value) (e : Entry)
     (h : ∀ x ∈ (item look e).reads, look' x = look x) : item look' e = item look e := by
@@ -894,6 +926,9 @@ structure Input where
   folds : List (Path × Bool)
   results : List (Value × Outcome)
   layouts : Shared (List (Value × Value × Value))
+  /-- The definition of the label of a field the selection is giving a
+  value, which the part may not reach yet. -/
+  named : List (CellId × Value)
   ribbon : Nat
   deriving DecidableEq
 
@@ -905,7 +940,7 @@ def partSeed : Entry → Seed
 
 /-- What a part is drawn from, as what the projection is of. -/
 def Input.shown (i : Input) : Shown :=
-  { doc := { root := none, cells := Std.TreeMap.ofList i.item.reached.val }, library := Builtin.library,
+  { doc := { root := none, cells := Std.TreeMap.ofList (i.named ++ i.item.reached.val) }, library := Builtin.library,
     selection := i.selection, folds := i.folds, results := i.results, layouts := i.layouts.val }
 
 /-- A part's frames. -/
@@ -935,18 +970,44 @@ structure Seen where
   folds : List (Path × Bool) := []
   results : List (Value × Outcome) := []
   layouts : Shared (List (Value × Value × Value)) := ⟨[]⟩
+  /-- The definition of the label of a field the selection is giving a
+  value. -/
+  named : List (CellId × Value) := []
   ribbon : Nat := 80
   deriving DecidableEq
 
 namespace Item
+
+/-- Whether a path is an entry's, or under it. -/
+def under (p : Position) : Path → Bool
+  | .key k :: .element q :: _ => k == Kinds.entries && q == p
+  | _ => false
+
+/-- Whether a path is an entry's, or above it. -/
+def over (p : Position) : Path → Bool
+  | [] => true
+  | [.key k] => k == Kinds.entries
+  | [.key k, .element q] => k == Kinds.entries && q == p
+  | _ => false
 
 /-- Whether a selection is in a part, or the part in it, or it's of an
 entry being added that the part draws. -/
 def touches (i : Item) (sel : Selection) : Bool :=
   match i.entry with
   | .whole _ => true
-  | .entry p _ => (entryAt p).isPrefixOf sel.path || sel.path.isPrefixOf (entryAt p) || sel.anchor == some (entryAt p)
-  | .end_ => sel.anchor == some entriesPath || sel.path.isPrefixOf entriesPath
+  | .entry p _ =>
+    under p sel.path || over p sel.path ||
+      match sel.anchor with
+      | some [.key k, .element q] => k == Kinds.entries && q == p
+      | _ => false
+  | .end_ =>
+    (match sel.anchor with
+      | some [.key k] => k == Kinds.entries
+      | _ => false) ||
+    match sel.path with
+    | [] => true
+    | [.key k] => k == Kinds.entries
+    | _ => false
 
 /-- What of each thing the editor's state holds a part is drawn with: the
 selection if it's in the part, the folds in it, the results of its
@@ -965,13 +1026,22 @@ def results (i : Item) (rs : List (Value × Outcome)) : List (Value × Outcome) 
 def layouts (i : Item) (ls : Shared (List (Value × Value × Value))) : Shared (List (Value × Value × Value)) :=
   if i.functions then ls else ⟨[]⟩
 
+/-- The selection, with the definition it names, if the selection is in
+the part. -/
+def naming (i : Item) (sn : Option Selection × List (CellId × Value)) :
+    Option Selection × List (CellId × Value) :=
+  match i.selection sn.1 with
+  | some sel => (some sel, sn.2)
+  | none => (none, [])
+
 end Item
 
 /-- A part's input: the part, with what of the editor's state it's drawn
 with. -/
 def input (c : Seen) (i : Item) : Input :=
-  { item := i, selection := i.selection c.selection, folds := i.folds c.folds,
-    results := i.results c.results, layouts := i.layouts c.layouts, ribbon := c.ribbon }
+  { item := i, selection := (i.naming (c.selection, c.named)).1, folds := i.folds c.folds,
+    results := i.results c.results, layouts := i.layouts c.layouts, named := (i.naming (c.selection, c.named)).2,
+    ribbon := c.ribbon }
 
 /-- Whether one thing a part is drawn with differs, between two states:
 not if the two hold the same thing, nor if what the part takes of each is
@@ -990,24 +1060,25 @@ theorem same_of_not_differs {α β : Type} [DecidableEq α] [DecidableEq β] (g 
 part: whether anything the part is drawn with differs. A selection that
 moves touches the parts it leaves and enters, and no other. -/
 def touched (c c' : Seen) (i : Item) : Bool :=
-  c.ribbon != c'.ribbon || differs i.selection c.selection c'.selection || differs i.folds c.folds c'.folds ||
+  c.ribbon != c'.ribbon || differs i.naming (c.selection, c.named) (c'.selection, c'.named) ||
+    differs i.folds c.folds c'.folds ||
     differs i.results c.results c'.results || differs i.layouts c.layouts c'.layouts
 
 /-- Whether a change of the editor's state leaves all the parts are drawn
 with as it was: then no part is touched, and none is asked. -/
 def still (c c' : Seen) : Bool :=
   c.ribbon == c'.ribbon && equal c.selection c'.selection && equal c.folds c'.folds &&
-    equal c.results c'.results && equal c.layouts c'.layouts
+    equal c.results c'.results && equal c.layouts c'.layouts && equal c.named c'.named
 
 /-- A change that's still leaves the state the parts are drawn with as it
 was. -/
 theorem eq_of_still (c c' : Seen) (h : still c c' = true) : c' = c := by
   simp only [still, Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩ := h
+  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hn⟩ := h
   cases c; cases c'
   simp only [Seen.mk.injEq]
   exact ⟨(equal_sound _ _ hs).symm, (equal_sound _ _ hf).symm, (equal_sound _ _ hres).symm,
-    (equal_sound _ _ hl).symm, hr.symm⟩
+    (equal_sound _ _ hl).symm, (equal_sound _ _ hn).symm, hr.symm⟩
 
 theorem not_touched_of_still (c c' : Seen) (h : still c c' = true) (i : Item) : touched c c' i = false := by
   rw [eq_of_still c c' h]

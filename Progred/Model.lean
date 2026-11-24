@@ -1,4 +1,4 @@
-import Progred.Display
+import Progred.Regrow
 import Deui.Lists
 
 /-!
@@ -25,9 +25,13 @@ the window's size. -/
 inductive Change where
   | cell (c : CellId) (definition : Option Value)
   | entry (i : Nat) (value : Value)
+  /-- An entry written at a path within it: a value there, or none. -/
+  | entryAt (i : Nat) (rel : List Step) (value : Option Value)
   | entryIn (i : Nat) (position : Position) (value : Value)
   | entryOut (i : Nat)
   | root (r : Option Value)
+  /-- The root written at a path within it. -/
+  | rootAt (rel : List Step) (value : Option Value)
   | document (d : Document)
   | select (s : Option Selection)
   | folds (fs : List (Path × Bool))
@@ -106,8 +110,17 @@ def selectedCell (m : Model) : Option CellId :=
 
 /-- What of the state the parts are drawn with. -/
 def seen (m : Model) : Display.Seen :=
-  { selection := m.selection.filter Display.drawnSelection, folds := m.folds, results := m.results,
-    layouts := m.layouts, ribbon := m.ribbon }
+  let selection := m.selection.filter Display.drawnSelection
+  -- The label of a field being given a value, which its record doesn't hold yet.
+  let named := match selection with
+    | some sel =>
+      if sel.stage == .pending then
+        match sel.path.getLast? with
+        | some (.key l) => ((m.doc.definition? l).map fun d => (l, d)).toList
+        | _ => []
+      else []
+    | none => []
+  { selection, folds := m.folds, results := m.results, layouts := m.layouts, named, ribbon := m.ribbon }
 
 def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩
 
@@ -129,6 +142,12 @@ def replaceAt : List (Position × Value) → Nat → Value → List (Position ×
   | (p, _) :: t, 0, v => (p, v) :: t
   | h :: t, i + 1, v => h :: replaceAt t i v
 
+/-- Entries with the value of the one at `i` written at a path within it. -/
+def writtenAt : List (Position × Value) → Nat → List Step → Option Value → List (Position × Value)
+  | [], _, _, _ => []
+  | (p, v) :: t, 0, rel, w => (p, v.written rel w) :: t
+  | h :: t, i + 1, rel, w => h :: writtenAt t i rel w
+
 /-- A root notebook with its entries replaced. -/
 def withEntries (root : Option Value) (items : List (Position × Value)) : Option Value :=
   match root with
@@ -146,6 +165,9 @@ def _root_.Progred.Change.apply : Change → Model → Model
   | .cell c v, m => { m with doc := { m.doc with cells := defined m.doc.cells c v } }
   | .entry i v, m =>
     { m with doc := { m.doc with root := entriesChanged m.doc.root (fun items => replaceAt items i v) } }
+  | .entryAt i rel w, m =>
+    { m with doc := { m.doc with root := entriesChanged m.doc.root (fun items => writtenAt items i rel w) } }
+  | .rootAt rel w, m => { m with doc := { m.doc with root := m.doc.root.map fun v => v.written rel w } }
   | .entryIn i p v, m =>
     { m with doc := { m.doc with
         root := entriesChanged m.doc.root (fun items => Deui.Lists.insert items (min i items.length) (p, v)) } }
@@ -184,21 +206,34 @@ def emitted (m : Model) : List Edit := m.log.reverse.map .change ++ [.rest m.tak
 
 /-- The changes that a document written at a path comes to: where the write
 landed says which. In a cell, the cell's definition. In an entry of the root
-notebook, that entry, written, added or taken away. Elsewhere under the
-root, the root. With no path, or one that leads nowhere, the document. -/
+notebook, that entry: written at the path within it, if that's all that
+changed of it; else written whole, added or taken away. Elsewhere under the
+root, the root, written at the path or whole. With no path, or one that
+leads nowhere, the document. -/
 def written (old new : Document) (at_ : Option Path) : List Change :=
   match at_.bind old.location? with
   | none => [.document new]
   | some ⟨.cell c, _⟩ => [.cell c new.cells[c]?]
   | some ⟨.root, steps⟩ =>
     match steps, Display.notebookEntries? old.root, Display.notebookEntries? new.root with
-    | .key k :: .element p :: _, some was, some now =>
+    | .key k :: .element p :: rel, some was, some now =>
       if k == Kinds.entries then
         match was.findIdx? (·.1 == p), now.findIdx? (·.1 == p), (now.find? (·.1 == p)).map (·.2) with
-        | some i, some _, some v => [.entry i v]
+        | some i, some _, some v =>
+          -- The write within the entry, if the entry is as that write leaves it.
+          match rel, (was[i]?).map (·.2) with
+          | r :: rest, some before =>
+            let w := v.at? (r :: rest)
+            if equal (before.written (r :: rest) w) v then [.entryAt i (r :: rest) w] else [.entry i v]
+          | _, _ => [.entry i v]
         | none, some j, some v => [.entryIn j p v]
         | some i, none, _ => [.entryOut i]
         | _, _, _ => [.root new.root]
+      else [.root new.root]
+    | r :: rest, none, none =>
+      -- A root that isn't a notebook, written within.
+      let w := new.root.bind (·.at? (r :: rest))
+      if equal (old.root.map fun v => v.written (r :: rest) w) new.root then [.rootAt (r :: rest) w]
       else [.root new.root]
     | _, _, _ => [.root new.root]
 

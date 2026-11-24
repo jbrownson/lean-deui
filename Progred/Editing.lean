@@ -272,7 +272,7 @@ def writeLine (m : Model) (path : Path) (text : String) : Model :=
       else none
     | none => none
   match bytes.bind fun b => m.doc.set (path ++ [.key Kinds.bytes]) (.blob b) with
-  | some doc => m.write doc (typing := true) (at_ := some path)
+  | some doc => m.write doc (typing := true) (at_ := some (path ++ [.key Kinds.bytes]))
   | none => m
 
 /-- The model with what's being typed changed: a line is written through. -/

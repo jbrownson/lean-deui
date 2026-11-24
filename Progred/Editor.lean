@@ -229,16 +229,57 @@ def drawn.f (seen : Display.Seen) (cells : Cells) (entry : Display.Entry) : (Nat
   let input := Display.input seen item
   ((input.ribbon, Display.frame input), ⟨seen, cells, entry, item, input⟩)
 
+/-- Whether two of a part's inputs are drawn from the same, but for the
+part's value and the selection. -/
+def alike (i i' : Display.Input) : Bool :=
+  equal i'.item.reached i.item.reached && decide (i'.folds = i.folds) && decide (i'.results = i.results) &&
+    equal i'.layouts i.layouts && decide (i'.named = i.named) && i'.ribbon == i.ribbon
+
+/-- A part's frames after a change of what it's drawn with, the part as it
+was: if only the selection it sees differs, the frames the selection is at
+are grown again; else all of them. -/
+def drawn.reseen (k : Drawn) (seen : Display.Seen) (cells : Cells) : (Nat × List (Fit.Edit Span)) × Drawn :=
+  let input := Display.input seen k.item
+  if alike k.input input then
+    ((input.ribbon, Display.reselect k.input.shown (k.input.shown.select input.selection) Display.depth
+      (Display.partSeed k.entry)), { k with seen, cells, input })
+  else ((input.ribbon, [.replace (Display.frame input)]), { k with seen, cells, input })
+
+/-- A part's frames after a write within it: if the part reaches what it
+did and is drawn with what it was, the frames the write is in are grown
+again; else all of them. -/
+def drawn.rewritten (k : Drawn) (seen : Display.Seen) (cells : Cells) (r : Step) (rest : List Step)
+    (w : Option Value) : (Nat × List (Fit.Edit Span)) × Drawn :=
+  let entry := Display.Entry.Edit.apply (.write (r :: rest) w) k.entry
+  let item := Display.item (look cells) entry
+  let input := Display.input seen item
+  if alike k.input input && decide (input.selection = k.input.selection) then
+    ((input.ribbon, Display.Entry.rewrite k.input.shown k.entry (r :: rest) w), ⟨seen, cells, entry, item, input⟩)
+  else ((input.ribbon, [.replace (Display.frame input)]), ⟨seen, cells, entry, item, input⟩)
+
 /-- A part's frames after an edit. One that writes no definition the part
 asked for, leaves the part as it is, and changes nothing the part is drawn
-with, makes no edit; any other has the part's frames grown again. -/
-def drawn.df (k : Drawn) (seen : Display.Seen) (ces : List Model.CellsEdit)
-    (ees : List (Whole (plain Display.Entry))) : (Nat × List (Fit.Edit Span)) × Drawn :=
-  if ees.isEmpty && !ces.any (writes k.item) && !Display.touched k.seen seen k.item then
-    ((k.input.ribbon, []), { k with seen, cells := run cellsEdits ces k.cells })
-  else
-    let made := drawn.f seen (run cellsEdits ces k.cells) (run (whole (plain Display.Entry)) ees k.entry)
+with, makes no edit. A change of what it's drawn with, and a write within
+the part, each grow again the frames they're at. Any other has the part's
+frames grown again from nothing. -/
+def drawn.df (k : Drawn) (seen : Display.Seen) (ces : List Model.CellsEdit) (ees : List Display.Entry.Edit) :
+    (Nat × List (Fit.Edit Span)) × Drawn :=
+  if ces.any (writes k.item) then
+    let made := drawn.f seen (run cellsEdits ces k.cells) (run Display.Entry.edits ees k.entry)
     ((made.1.1, [.replace made.1.2]), made.2)
+  else
+    match ees with
+    | [] =>
+      if Display.touched k.seen seen k.item then drawn.reseen k seen (run cellsEdits ces k.cells)
+      else ((k.input.ribbon, []), { k with seen, cells := run cellsEdits ces k.cells })
+    | [.write (r :: rest) w] =>
+      if Display.touched k.seen seen k.item then
+        let made := drawn.f seen (run cellsEdits ces k.cells) (run Display.Entry.edits ees k.entry)
+        ((made.1.1, [.replace made.1.2]), made.2)
+      else drawn.rewritten k seen (run cellsEdits ces k.cells) r rest w
+    | _ =>
+      let made := drawn.f seen (run cellsEdits ces k.cells) (run Display.Entry.edits ees k.entry)
+      ((made.1.1, [.replace made.1.2]), made.2)
 
 /-- A part's frames, as an incremental function of what it's drawn under
 and the part. -/
@@ -247,29 +288,95 @@ def drawn : Cached (prod Under Entries.Parts) Framed where
   f a := drawn.f a.1.1 a.1.2 a.2
   df k d := drawn.df k d.1.1 d.1.2 d.2
 
-theorem drawn_ok : drawn.ok := by
-  intro a d
-  obtain ⟨⟨seen, cells⟩, entry⟩ := a
-  obtain ⟨⟨seen', ces⟩, ees⟩ := d
-  show (Framed.apply (drawn.df (drawn.f seen cells entry).2 seen' ces ees).1 (drawn.f seen cells entry).1,
+theorem alike_shown (i i' : Display.Input) (h : alike i i' = true) :
+    i'.shown = i.shown.select i'.selection ∧ i'.ribbon = i.ribbon := by
+  simp only [alike, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at h
+  obtain ⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h6⟩, h5⟩ := h
+  exact ⟨Display.Input.shown_select i i' (equal_sound _ _ h1) h2 h3 (equal_sound _ _ h4) h6, h5⟩
+
+/-- A part's derivative is right: its edits take the part's frames to the
+edited part's, under what that's drawn with. -/
+theorem drawn_df_ok (seen seen' : Display.Seen) (cells : Cells) (ces : List Model.CellsEdit)
+    (entry : Display.Entry) (ees : List Display.Entry.Edit) :
+    (Framed.apply (drawn.df (drawn.f seen cells entry).2 seen' ces ees).1 (drawn.f seen cells entry).1,
       (drawn.df (drawn.f seen cells entry).2 seen' ces ees).2) =
-    drawn.f seen' (run cellsEdits ces cells) (run (whole (plain Display.Entry)) ees entry)
-  by_cases h : (ees.isEmpty && !ces.any (writes (Display.item (look cells) entry)) &&
-      !Display.touched seen seen' (Display.item (look cells) entry)) = true
-  · simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_iff] at h
-    obtain ⟨⟨he, hc⟩, ht⟩ := h
-    subst he
-    have hi := item_untouched entry ces cells hc
-    have hin := Display.input_of_not_touched seen seen' _ ht
-    simp only [drawn.df, drawn.f, List.isEmpty_nil, hc, ht, Bool.not_false, Bool.and_self, ite_true]
-    show (((Display.input seen (Display.item (look cells) entry)).ribbon,
-        Display.frame (Display.input seen (Display.item (look cells) entry))), _) = _
-    simp only [run, hi, hin]
-  · have hf : (ees.isEmpty && !ces.any (writes (Display.item (look cells) entry)) &&
-        !Display.touched seen seen' (Display.item (look cells) entry)) = false := by simpa using h
-    simp only [drawn.df, drawn.f] at hf ⊢
-    simp only [hf]
-    rfl
+    drawn.f seen' (run cellsEdits ces cells) (run Display.Entry.edits ees entry) := by
+  -- Growing again from nothing is always right.
+  have whole : (Framed.apply
+      ((drawn.f seen' (run cellsEdits ces cells) (run Display.Entry.edits ees entry)).1.1,
+        [Fit.Edit.replace (drawn.f seen' (run cellsEdits ces cells) (run Display.Entry.edits ees entry)).1.2])
+      (drawn.f seen cells entry).1,
+      (drawn.f seen' (run cellsEdits ces cells) (run Display.Entry.edits ees entry)).2) =
+      drawn.f seen' (run cellsEdits ces cells) (run Display.Entry.edits ees entry) := rfl
+  by_cases hc : ces.any (writes (Display.item (look cells) entry)) = true
+  · simp only [drawn.df, drawn.f, hc, ite_true]
+    exact whole
+  · have hc' : ces.any (writes (Display.item (look cells) entry)) = false := by simpa using hc
+    have hi := item_untouched entry ces cells hc'
+    have entryOf : ∀ (sn : Display.Seen) (cs : Cells) (e : Display.Entry),
+        (Display.input sn (Display.item (look cs) e)).item.entry = e := fun _ cs e => Display.item_entry (look cs) e
+    cases ees with
+    | nil =>
+      by_cases ht : Display.touched seen seen' (Display.item (look cells) entry) = true
+      · simp only [drawn.df, drawn.f, hc', ht, ite_true, Bool.false_eq_true, ite_false, run, hi]
+        generalize hr : drawn.reseen _ seen' (run cellsEdits ces cells) = made
+        simp only [drawn.reseen] at hr
+        split at hr <;> subst hr
+        · next hal =>
+          obtain ⟨hs, _⟩ := alike_shown _ _ hal
+          have grown := Display.reselect_ok (Display.input seen (Display.item (look cells) entry)).shown
+            (Display.input seen' (Display.item (look cells) entry)).selection Display.depth
+            (Display.partSeed entry)
+          show (((Display.input seen' (Display.item (look cells) entry)).ribbon,
+            run (Fit.edits Span) _ (Display.frame (Display.input seen (Display.item (look cells) entry)))), _) = _
+          simp only [Display.frame, entryOf]
+          rw [grown, ← hs]
+        · rfl
+      · have ht' : Display.touched seen seen' (Display.item (look cells) entry) = false := by simpa using ht
+        have hin := Display.input_of_not_touched seen seen' _ ht'
+        simp only [drawn.df, drawn.f, hc', ht', Bool.false_eq_true, ite_false, run, hi, hin]
+        rfl
+    | cons e rest =>
+      cases e with
+      | replace x => cases rest <;> (simp only [drawn.df, drawn.f, hc', Bool.false_eq_true, ite_false]; exact whole)
+      | write rel w =>
+        cases rest with
+        | cons e2 rest2 => simp only [drawn.df, drawn.f, hc', Bool.false_eq_true, ite_false]; exact whole
+        | nil =>
+          cases rel with
+          | nil => simp only [drawn.df, drawn.f, hc', Bool.false_eq_true, ite_false]; exact whole
+          | cons r rs =>
+            by_cases ht : Display.touched seen seen' (Display.item (look cells) entry) = true
+            · simp only [drawn.df, drawn.f, hc', ht, ite_true, Bool.false_eq_true, ite_false]
+              exact whole
+            · have ht' : Display.touched seen seen' (Display.item (look cells) entry) = false := by simpa using ht
+              simp only [drawn.df, drawn.f, hc', ht', Bool.false_eq_true, ite_false]
+              generalize hr : drawn.rewritten _ seen' (run cellsEdits ces cells) r rs w = made
+              simp only [drawn.rewritten] at hr
+              split at hr <;> subst hr
+              · next hboth =>
+                simp only [Bool.and_eq_true, decide_eq_true_eq] at hboth
+                obtain ⟨hal, hsel⟩ := hboth
+                obtain ⟨hs, _⟩ := alike_shown _ _ hal
+                have same : (Display.input seen' (Display.item (look (run cellsEdits ces cells))
+                    (Display.Entry.Edit.apply (.write (r :: rs) w) entry))).shown =
+                    (Display.input seen (Display.item (look cells) entry)).shown := by
+                  rw [hs, hsel]
+                  rfl
+                have grown := Display.Entry.rewrite_ok (Display.input seen (Display.item (look cells) entry)).shown
+                  entry r rs w
+                have target : run (Fit.edits Span)
+                    (Display.Entry.rewrite (Display.input seen (Display.item (look cells) entry)).shown entry
+                      (r :: rs) w)
+                    (Display.frame (Display.input seen (Display.item (look cells) entry))) =
+                    Display.frame (Display.input seen' (Display.item (look (run cellsEdits ces cells))
+                      (Display.Entry.Edit.apply (.write (r :: rs) w) entry))) := by
+                  simp only [Display.frame, entryOf]
+                  rw [same, grown]
+                exact Prod.ext (Prod.ext rfl target) rfl
+              · rfl
+
+theorem drawn_ok : drawn.ok := fun a d => drawn_df_ok a.1.1 d.1.1 a.1.2 d.1.2 a.2 d.2
 
 /-- A part: its frames, laid out within the ribbon, as lines. -/
 def part : Cached (prod Under Entries.Parts) PartLines :=
@@ -491,6 +598,6 @@ def app : App.App edits where
   view := view
   respond m scene kept e := (event ⟨(laidOf kept).2⟩ (relaid kept) m.taken scene e).emitted
   settle m kept :=
-    if m.reveal then [.rest (Model.revealed ⟨(laidOf kept).2⟩ { m with reveal := false })] else []
+    if m.reveal then (Model.revealed ⟨(laidOf kept).2⟩ { m.taken with reveal := false }).emitted else []
 
 end Progred.Editor
