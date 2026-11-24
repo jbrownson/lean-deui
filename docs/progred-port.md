@@ -277,31 +277,42 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   call's function or argument or a kind, it's its name. Space folds either
   way. The Rust version follows cells until a cycle.
 
-## Tried: drawing as composed derivatives
+## The view by derivative, beside the view as it is
 
-`Spike/Derived.lean`, with `Deui/Tree.lean` under it, tries the other way
-to make a part's frames: not by growing frames and asking afterwards what
-each one saw, but by writing the drawing so that each edit has somewhere
-to go. It isn't the editor's view. It draws lists, records, literals and
-cells by name, with no selection, holes, folds, kinds or open cells, and
-`progred_derived` runs it beside the view as it is, on the same edits,
-checking that the two draw the same lines and that each keeps the lines
-it would draw from nothing.
+`Progred/Derived/`, on `Deui/Tree.lean`, is the view being made the other
+way: not by growing frames and asking afterwards what each one saw, but by
+writing the drawing so that each edit has somewhere to go. It isn't the
+editor's view yet. `progred_derived` runs it beside the view as it is:
+with files, it says which of their parts the two draw the same; with a
+number, it times the same edits through both, checking that each keeps
+the lines it would draw from nothing.
 
-- **A value is a tree, labelled with what each node itself shows:** a
-  list's positions, a record's labels, a cell's id, a literal's bytes. A
-  node's doc is drawn from its label and the names its keys look up, and
-  the definitions reach the doc no other way (`Tree.reading`).
+- **A value is a tree that mirrors it** (`Derived/Tree.lean`): a node for
+  each list, record, cell, blob and literal, its kids its elements' and
+  fields' nodes in the order the value holds them. A node's label is all
+  its own doc is drawn from: its path, how its place asks it to be drawn
+  (which its parent's kind and its own label say), and its value without
+  what's inside its elements and fields. A node drawn from more than that
+  has its whole value too: an evaluation, for what its expression gave,
+  and a record of a kind a function may draw.
+- **A form draws a node's own doc, its kids in slots** (`Derived/Forms.lean`).
+  A slot is the kid's place among the value's own fields, so a record
+  drawn in another order, or with only some fields, is another doc over
+  the same kids. Where a value has none, the node draws the hole itself.
+- **A form reads the definitions through `look`, which answers for the
+  node's keys and no others** (`Tree.reading2`): the cells its own value
+  names, and the cells the definitions of its kind, its function or
+  itself name. So `reading2_touched` holds for every form with no proof
+  of its own: a definition written draws again the nodes with that key,
+  their kids kept (`Tree.refresh`). A key left out would show as a name
+  not drawn, which the check against the view as it is finds.
 - **A write is an edit of the tree at the place it lands** (`rewrite`). It
-  goes down the steps as the write does. A value set where one was is that
-  kid replaced or edited; one put in is the node's label and kids again,
-  the others kept; a step taken away, the same without it.
-  `rewrite_ok` says the edits take the tree to the tree of the value
-  after, whatever order a record's fields are in.
-- **A definition written draws again the nodes with that key,** their
-  kids kept, and no others (`Tree.refresh`). A node is stale when an edit
-  touches one of its keys; `get_untouched` says a cell no edit writes has
-  the name it had, and `Tree.reading_touched` makes the rest follow.
+  goes down the steps as the write does. A value set where one was, or put
+  in, is the node's label and kids again, the others kept; a kid edited
+  further in is that kid's edits, and the label again of a node drawn
+  from its whole value; a kind set is the record's tree again, since its
+  fields are drawn by its kind. `rewrite_ok` says the edits take the tree
+  to the tree of the value after, whatever order a record's fields are in.
 - `lines_ok` is the whole of it composed: the tree, its frames, the
   layout, the rows.
 
@@ -310,19 +321,33 @@ frame with what it saw before, and matches no kids by key. The one
 comparison left is the layout's, of tokens at the front and the end of a
 frame walked again (`Fit.mend`).
 
+Where it is: every form with nothing selected, but a cell drawn open and
+a parameter's type. On the example files the two draw the same wherever
+no cell is open: all of `projections.gid`, 12 of `tour.gid`'s 14 parts,
+9 of the 14 of the Rust version's `navigation.gid`. One thing is drawn
+otherwise on purpose: a record's name is bare wherever it's drawn, a
+layout's part too, where the view as it is draws that one in quotes.
+
+Still to come, in order: cells drawn open and parameters' types, where a
+definition written is an edit of the tree; folds; the selection, typing
+and holes being filled, as context each node is stale to by its path;
+errors marked; then the editor's parts drawn this way, and
+`Progred/Display.lean`'s forms, `Progred/Regrow.lean` and what a part
+reaches taken out.
+
 On 300 entries, 3,300 lines, each edit made 20 times at different places
 (`progred_derived 300`, and `progred_derived 300 parts`):
 
 | | one part: as it is | derived | a part an entry: as it is | derived |
 |---|---|---|---|---|
-| from nothing | 24 ms | 16 ms | 22 ms | 13.5 ms |
-| a text written | 2.4 ms | 0.45 ms | 46 µs | 20 µs |
-| an element added to a list | 2.4 ms | 0.5 ms | 80 µs | 44 µs |
-| a field added to a record | 2.5 ms | 0.5 ms | 56 µs | 21 µs |
+| from nothing | 25 ms | 22 ms | 21 ms | 16 ms |
+| a text written | 2.5 ms | 0.45 ms | 45 µs | 18 µs |
+| an element added to a list | 2.5 ms | 0.5 ms | 75 µs | 41 µs |
+| a field added to a record | 2.5 ms | 0.5 ms | 57 µs | 25 µs |
 | an entry added | 2.7 ms | 0.9 ms | | |
-| a cell a tenth of the entries show, renamed | 35 ms | 5 ms | 3.8 ms | 1.7 ms |
-| a label every entry has, renamed | 35 ms | 37 ms | 30 ms | 10 ms |
-| a cell nothing shows, written | 1 µs | 0.3 ms | 0.5 ms | 1 ms |
+| a cell a tenth of the entries show, renamed | 30 ms | 5.7 ms | 2.7 ms | 1.7 ms |
+| a label every entry has, renamed | 35 ms | 41 ms | 23 ms | 9 ms |
+| a cell nothing shows, written | 2 µs | 0.8 ms | 0.3 ms | 1.2 ms |
 
 What that says:
 
@@ -330,8 +355,7 @@ What that says:
   part of its own. As it is, a write works out again what the part
   reaches, which reads the whole part; derived, nothing reads the part.
 - A rename gives 30 line edits, or 300, where the view as it is gives
-  thousands: only the nodes that show the name are drawn again. In a part
-  of their own that's two to three times quicker.
+  thousands: only the nodes that show the name are drawn again.
 - In one part, 300 nodes renamed costs what growing the part again
   does. It was 88 ms while the layout took its edits one at a time, each
   walking the root's 300 kids: a frame now takes a run of edits for each
@@ -340,18 +364,12 @@ What that says:
   3,300 lines by walking to its place. Every stage after the layout keeps
   its lines that way, so many changes at once in one long part cost the
   part's length each, whoever makes them. A part an entry doesn't pay it.
-- A cell nothing shows costs a walk of every node to find that out, 50 ns
-  a node, and each part its own copy of the definitions brought up to
-  date. As it is, a part keeps the cells it asked for, and looks there.
-  An index from cell to the nodes with that key, kept as a function of
-  the tree, would make it what the edit touches.
-
-What it would take to be the view: every form in `Progred/Display.lean`
-written as a label, its keys and a doc; a kid's hint as part of its label;
-a cell drawn open, whose kids are its definition's, so that a definition
-written is an edit of the tree and not only of docs; the selection and the
-folds as context found by path, not by walking; kinds, whose fields are
-looked up from what a first lookup gives.
+- A cell nothing shows costs a walk of every node to find that out: about
+  0.1 µs a node, more for a record of a kind, whose kind's definition is
+  looked up to ask what it names. As it is, a part keeps the cells it
+  asked for, and looks there. An index from cell to the nodes with that
+  key, kept as a function of the tree, would make it what the edit
+  touches.
 
 ## Where it stands against the Rust version
 

@@ -87,8 +87,9 @@ module does.
   node says whether an edit could change its doc, and `drawn_ok` holds it
   to that. A node drawn from what its keys look up is stale when an edit
   touches one of its keys (`reading_touched`); nothing is recorded while
-  drawing. Progred's view doesn't use it yet: `Spike/Derived.lean` tries
-  it, and `docs/progred-port.md` says what came of that.
+  drawing; `reading2` is the same for a node that reads through a first
+  answer to a second. `Progred/Derived/` builds Progred's view on it,
+  beside the view as it is; `docs/progred-port.md` says how far it's got.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
   a key, text typed or the wheel, to edits; a handler also reads what the
@@ -220,7 +221,8 @@ lake build progred_play && .lake/build/bin/progred_play # plays keys through Pro
 .lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
 .lake/build/bin/progred examples/projections.gid        # kinds drawn by projections in the document
 lake build progred_measure && .lake/build/bin/progred_measure 300  # what events cost, on a notebook of 300 entries
-lake build progred_derived && .lake/build/bin/progred_derived 300  # a spike: drawing as composed derivatives, against the view as it is
+lake build progred_derived && .lake/build/bin/progred_derived 300  # the view by derivative, timed against the view as it is
+.lake/build/bin/progred_derived where examples/tour.gid            # which parts the two draw the same, and where they part ways
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version

@@ -71,6 +71,12 @@ Read `README.md` first for what the repository is.
   change out of the state the app holds. A stage that needs to know what
   changed gets an edit that says so; it doesn't compare a value with what
   it was.
+- The view is being moved to `Progred/Derived/` (`docs/progred-port.md`
+  says how far). A form there draws a node from its label alone and
+  reads definitions only through `look`; a cell it reads is one of the
+  node's keys (`keys1`, `through`). `progred_derived` with the example
+  files says which parts it draws as the view as it is does: that count
+  goes up, not down. With a number it times both.
 - `progred_measure` says what events cost; run it before and after a
   change to the view, on a notebook (`progred_measure 300`) and on the
   same entries as one part (`progred_measure 300 one`); with `structure`

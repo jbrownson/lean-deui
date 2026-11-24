@@ -1,4 +1,5 @@
 import Progred.Editor
+import Progred.Derived.Forms
 
 /-! Progred's laws' axioms, checked by `lake build`: it fails on a `sorry`
 or a new axiom. -/
@@ -53,3 +54,9 @@ or a new axiom. -/
 
 /-- info: 'Progred.Display.reshaped_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Display.reshaped_ok
+
+/-- info: 'Progred.Derived.rewrite_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Derived.rewrite_ok
+
+/-- info: 'Progred.Derived.lines_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Derived.lines_ok

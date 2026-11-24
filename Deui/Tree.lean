@@ -315,6 +315,49 @@ theorem reading_touched (get : cc.Value → K → A) (keys : L → List K) (draw
   simp only [touched, List.any_eq_false] at hl
   simpa using hl k hk
 
+/-! ### Looked up through what's looked up -/
+
+/-- A context as a node sees it: what its keys look up, and nothing for
+any other key. -/
+def only (get : cc.Value → K → Option A) [BEq K] (keys : List K) (c : cc.Value) (k : K) : Option A :=
+  if keys.contains k then get c k else none
+
+/-- A node drawn from its label and a lookup that answers only for its
+keys: the keys its label gives, and the keys those answers give. A node
+that reads through a first answer to a second lists both; a key left out
+looks up nothing, whatever the context holds. -/
+def reading2 [BEq K] (get : cc.Value → K → Option A) (keys1 : L → List K)
+    (keys2 : L → (K → Option A) → List K) (draw : L → (K → Option A) → Fit.Doc S) : cc.Value → L → Fit.Doc S :=
+  fun c l => draw l (only get (keys1 l ++ keys2 l (only get (keys1 l) c)) c)
+
+/-- Whether an edit touches one of a node's keys, first or second. -/
+def touched2 [BEq K] (get : cc.Value → K → Option A) (touches : cc.Edit → K → Bool) (keys1 : L → List K)
+    (keys2 : L → (K → Option A) → List K) : cc.Value → cc.Edit → L → Bool :=
+  fun c d l => (keys1 l).any (touches d) || (keys2 l (only get (keys1 l) c)).any (touches d)
+
+theorem only_untouched [BEq K] [LawfulBEq K] (get : cc.Value → K → Option A) (touches : cc.Edit → K → Bool)
+    (h : ∀ c d k, touches d k = false → get (cc.apply d c) k = get c k) (keys : List K) (c : cc.Value)
+    (d : cc.Edit) (hk : keys.any (touches d) = false) : only get keys (cc.apply d c) = only get keys c := by
+  funext k
+  simp only [only]
+  split
+  · next hc =>
+    apply h
+    simp only [List.any_eq_false] at hk
+    simpa using hk k (by simpa using hc)
+  · rfl
+
+/-- A node none of whose keys an edit touches is drawn as it was. -/
+theorem reading2_touched [BEq K] [LawfulBEq K] (get : cc.Value → K → Option A) (keys1 : L → List K)
+    (keys2 : L → (K → Option A) → List K) (draw : L → (K → Option A) → Fit.Doc S)
+    (touches : cc.Edit → K → Bool) (h : ∀ c d k, touches d k = false → get (cc.apply d c) k = get c k)
+    (c : cc.Value) (d : cc.Edit) (l : L) (hl : touched2 get touches keys1 keys2 c d l = false) :
+    reading2 get keys1 keys2 draw (cc.apply d c) l = reading2 get keys1 keys2 draw c l := by
+  simp only [touched2, Bool.or_eq_false_iff] at hl
+  have first := only_untouched get touches h (keys1 l) c d hl.1
+  simp only [reading2, first]
+  rw [only_untouched get touches h _ c d (by simpa [List.any_append] using hl)]
+
 end Tree
 
 end Deui

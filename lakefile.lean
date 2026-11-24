@@ -69,7 +69,7 @@ lean_exe progred where
 lean_exe progred_measure where
   root := `Spike.Measure
 
-/-- A spike: lists, records and names drawn as composed derivatives,
-measured against the view as it is. -/
+/-- The view by derivative, beside the view as it is: which parts of a
+file the two draw the same, and what the same edits cost through each. -/
 lean_exe progred_derived where
   root := `Spike.Derived
