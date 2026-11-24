@@ -552,7 +552,11 @@ def fine : Extent → List (Ready S) → List (Splice S)
 as it stands. -/
 def readied [DecidableEq S] (relay : Kept S → List (Splice S) × Kept S) (i : Nat) : Item S → Ready S
   | .token t => .token t
-  | .kid j k => if j = i then .kid j k (relay k).2 (relay k).1 else .kid j k k []
+  | .kid j k =>
+    if j = i then
+      let made := relay k
+      .kid j k made.2 made.1
+    else .kid j k k []
 
 /-- A kept frame after an edit, and the splices that take its tokens
 there. A frame replaced is laid out from nothing, where it stood. Above
@@ -561,7 +565,8 @@ out as it was but for the kid that changed, the kid's splices are all, and
 otherwise its tokens are replaced whole. -/
 def Kept.relay [DecidableEq S] (m : Measure S) (ribbon : Nat) : Edit S → Kept S → List (Splice S) × Kept S
   | .replace f, k =>
-    ([⟨Extent.zero, k.extent, (Frame.lay m ribbon f k.first k.col).tokens⟩], Frame.lay m ribbon f k.first k.col)
+    let made := Frame.lay m ribbon f k.first k.col
+    ([⟨Extent.zero, k.extent, made.tokens⟩], made)
   | .kid i e, .node (.node doc kids) first col items _ ext =>
     let ready := items.map (readied (Kept.relay m ribbon e) i)
     let kids' := kids.modify i (Edit.apply e)
@@ -769,8 +774,9 @@ theorem Kept.relay_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (e : 
 def relays [DecidableEq S] (m : Measure S) (ribbon : Nat) : List (Edit S) → Kept S → List (Splice S) × Kept S
   | [], k => ([], k)
   | e :: es, k =>
-    ((Kept.relay m ribbon e k).1 ++ (relays m ribbon es (Kept.relay m ribbon e k).2).1,
-      (relays m ribbon es (Kept.relay m ribbon e k).2).2)
+    let made := Kept.relay m ribbon e k
+    let rest := relays m ribbon es made.2
+    (made.1 ++ rest.1, rest.2)
 
 theorem relays_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (es : List (Edit S)) (fr : Frame S) (f c : Nat),
     (relays m ribbon es (Frame.lay m ribbon fr f c)).2 = Frame.lay m ribbon (run (edits S) es fr) f c ∧
@@ -787,17 +793,21 @@ theorem relays_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (es : Lis
 reach; a new one lays everything out. -/
 def fit.df [DecidableEq S] (m : Measure S) (ribbon : Nat) (kept : Kept S) (ribbon' : Nat) (es : List (Edit S)) :
     List (Splice S) × (Nat × Kept S) :=
-  if ribbon' = ribbon then ((relays m ribbon es kept).1, (ribbon, (relays m ribbon es kept).2))
+  if ribbon' = ribbon then
+    let made := relays m ribbon es kept
+    (made.1, (ribbon, made.2))
   else
-    ([⟨Extent.zero, kept.extent, (Frame.lay m ribbon' (run (edits S) es kept.frame) 0 0).tokens⟩],
-      (ribbon', Frame.lay m ribbon' (run (edits S) es kept.frame) 0 0))
+    let made := Frame.lay m ribbon' (run (edits S) es kept.frame) 0 0
+    ([⟨Extent.zero, kept.extent, made.tokens⟩], (ribbon', made))
 
 /-- A frame tree laid out as text within a ribbon, as an incremental
 function of the ribbon and the tree. A frame replaced costs the frames
 above it, each walked once; a new ribbon lays everything out again. -/
 def fit [DecidableEq S] (m : Measure S) : Cached (prod (latest Nat) (runs (edits S))) (runs (Text.edits S)) where
   Cache := Nat × Kept S
-  f a := (lines (Frame.lay m a.1 a.2 0 0).tokens, (a.1, Frame.lay m a.1 a.2 0 0))
+  f a :=
+    let made := Frame.lay m a.1 a.2 0 0
+    (lines made.tokens, (a.1, made))
   df k d := fit.df m k.1 k.2 d.1 d.2
 
 /-- Fitting's derivative is right: its splices take the text to the edited

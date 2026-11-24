@@ -14,7 +14,7 @@ namespace Progred.Entries
 open Progred Deui Display
 
 /-- The parts' edit structure: a part is replaced whole. -/
-abbrev Parts : EditStructure := whole (plain Entry)
+abbrev Parts : EditStructure := runs (whole (plain Entry))
 
 def part (x : Position × Value) : Entry := .entry x.1 x.2
 
@@ -118,7 +118,7 @@ theorem entries_unchanged (root : Option Value) (f : List (Position × Value) �
 theorem replaceAt_map (items : List (Position × Value)) (i : Nat) (v : Value) (x : Position × Value)
     (h : items[i]? = some x) (tail : List Entry) :
     (Model.replaceAt items i v).map part ++ tail =
-      Lists.update Parts (items.map part ++ tail) i (.replace (.entry x.1 v)) := by
+      Lists.update Parts (items.map part ++ tail) i [.replace (.entry x.1 v)] := by
   induction items generalizing i with
   | nil => simp at h
   | cons y t ih =>
@@ -153,7 +153,7 @@ def edits (m : Model) : Model.Edit → List (Lists.Edit.of Parts)
     match notebookEntries? m.doc.root with
     | some items =>
       match items[i]? with
-      | some x => [.update i (.replace (.entry x.1 v))]
+      | some x => [.update i [.replace (.entry x.1 v)]]
       | none => []
     | none => []
   | .change (.entryIn i p v) =>

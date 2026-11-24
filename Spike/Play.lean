@@ -11,10 +11,10 @@ def show_ (m : M) : IO Unit := do
   let model := m.state
   -- The layout the view keeps, which is what the editor reads.
   let l : Model.Layout := ⟨(Editor.laidOf m.shown.2).2⟩
-  for block in l.blocks do
-    for line in block.lines do
+  for lines in l.parts do
+    for line in lines do
       IO.println ("  | " ++ line.plain)
-      let failed := line.toList.filter fun s => s.mark > 0 && ((block.occs[s.mark - 1]?).map (·.failed)).getD false
+      let failed := line.cells.filter fun s => (s.occ.map (·.failed)).getD false
       if !failed.isEmpty then IO.println ("  ! " ++ String.join (failed.map (·.text)))
   -- What's kept is what working it all out again gives: the laws say so,
   -- and this looks.
@@ -25,7 +25,8 @@ def show_ (m : M) : IO Unit := do
   match model.selection with
   | some sel =>
     let at_ := (l.here model).map fun (b, i) =>
-      s!"line {l.lineOf b + l.blocks[b]!.stops[i]!.line} col {l.blocks[b]!.stops[i]!.col}"
+      let stop := (Model.stops l.parts[b]!)[i]!
+      s!"line {l.lineOf b + stop.line} col {stop.col}"
     let typing := sel.editing.map fun e => s!" typing \"{e.text}\"{if e.picker then " (query)" else ""}"
     IO.println s!"  selection: {repr sel.stage} at {at_.getD "?"}{typing.getD ""}"
     let offers := Model.offers model

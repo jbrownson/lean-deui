@@ -1,10 +1,13 @@
+import Deui.Fit
+import Progred.Gid
+
 /-!
 Layout, in characters: text is monospace, so a place is a line and a column.
-A `Doc` says how something may be laid out: pieces side by side, one under
-another, indented, and alternatives, the first taken when it fits on the
-line within the ribbon, else the second. Laying one out gives lines of
-spans, each marked with what it shows, so a click or a selection finds its
-way back.
+What's laid out is spans, each with how it looks and the occurrence it
+shows, so a click or an arrow key finds its way back. A doc says how spans
+may go: side by side, one under another, indented, or the first of two
+ways that fits the ribbon; `Deui/Fit.lean` lays it out, and lays it out
+again where it changes.
 -/
 
 namespace Progred
@@ -16,87 +19,119 @@ inductive Face where
   | caret
   deriving DecidableEq, Inhabited, Repr
 
-structure Span where
-  col : Nat
-  text : String
-  face : Face
-  /-- What the span shows: an occurrence's number, 0 for none. -/
-  mark : Nat
+inductive OccKind where
+  /-- A value, where it is drawn. -/
+  | value
+  /-- A place for a value, with none. -/
+  | hole
+  /-- A place between a list's elements; its path is where a new element
+  would go. -/
+  | insertion
+  /-- The end of a record, where a field is added; its path is the record's. -/
+  | fieldEnd
+  /-- A field's label; its path is the field's value's. -/
+  | label
+  /-- A result: computed, not stored. -/
+  | computed
+  /-- A place to add an entry of the root notebook: before the entry at its
+  path, or at the entries' end for their path. -/
+  | entryPoint
   deriving DecidableEq, Inhabited, Repr
 
-def Span.stop (s : Span) : Nat := s.col + s.text.length
+/-- Something drawn that can be chosen: where it is in the document, and
+what kind of thing. -/
+structure Occ where
+  path : Path
+  kind : OccKind
+  /-- Whether an evaluation's error is about this value. -/
+  failed : Bool := false
+  /-- The cell it is: a value that's a cell, or a label. -/
+  cell : Option CellId := none
+  deriving DecidableEq, Inhabited
 
-abbrev Line := Array Span
+structure Span where
+  text : String
+  face : Face
+  /-- The occurrence it shows, if any. -/
+  occ : Option Occ := none
+  /-- Whether it's where its occurrence starts: where an arrow key stops
+  for it. -/
+  start : Bool := false
+  deriving DecidableEq, Inhabited
 
-inductive Doc where
-  | text (s : String) (face : Face)
-  /-- Nothing, but a place: an insertion point, or a caret. -/
-  | point (face : Face)
-  /-- Side by side: each part starts where the one before ended; a part's
-  later lines start at the row's base column. -/
-  | row (parts : List Doc)
-  /-- One under another. -/
-  | col (parts : List Doc)
-  | indent (n : Nat) (d : Doc)
-  /-- Its later lines start `n` columns further in; its first starts where
-  it would. -/
-  | hang (n : Nat) (d : Doc)
-  /-- `flat` if it's one line and fits the ribbon, else `stacked`. -/
-  | alt (flat stacked : Doc)
-  /-- Everything inside shows occurrence `id`, unless marked deeper. -/
-  | mark (id : Nat) (d : Doc)
-  deriving Inhabited
+abbrev Doc := Deui.Fit.Doc Span
+
+/-- A line: its indent, and its spans one after another. -/
+abbrev Line := Deui.Text.Line Span
+
+/-- A span's width is its characters; `n` columns of nothing are `n` spaces. -/
+def measure : Deui.Fit.Measure Span :=
+  ⟨fun s => s.text.length, fun n => { text := "".pushn ' ' n, face := .ink }⟩
+
+def t (s : String) (face : Face := .ink) : Doc := .text { text := s, face }
+def delim (s : String) : Doc := .text { text := s, face := .delimiter }
+def dim (s : String) : Doc := .text { text := s, face := .dim }
+
+/-- Nothing, but a place: an insertion point, or a caret. -/
+def point (face : Face) : Doc := .text { text := "", face }
 
 namespace Doc
 
-/-- The width of a doc on one line, if its first choices put it on one. -/
-def width? : Doc → Option Nat
-  | .text s _ => some s.length
-  | .point _ => some 0
-  | .row parts => parts.foldlM (fun acc p => (width? p).map (acc + ·)) 0
-  | .col [] => some 0
-  | .col [d] => width? d
-  | .col _ => none
-  | .indent n d => (width? d).map (n + ·)
-  | .hang _ d => width? d
-  | .alt flat _ => width? flat
-  | .mark _ d => width? d
+open Deui.Fit (Doc)
 
-/-- Where a line ends. -/
-def lineStop (start : Nat) (l : Line) : Nat :=
-  l.foldl (fun acc s => max acc s.stop) start
+mutual
+/-- A doc with its spans that show nothing yet showing `o`, the first of
+them marked as where `o` starts, unless one before was. -/
+def markFrom (o : Occ) : Deui.Fit.Doc Span → Bool → Deui.Fit.Doc Span × Bool
+  | .text s, started =>
+    if s.occ.isSome then (.text s, started) else (.text { s with occ := some o, start := !started }, true)
+  | .row parts, started =>
+    let made := markAll o parts started
+    (.row made.1, made.2)
+  | .col parts, started =>
+    let made := markAll o parts started
+    (.col made.1, made.2)
+  | .indent n d, started =>
+    let made := markFrom o d started
+    (.indent n made.1, made.2)
+  | .hang n d, started =>
+    let made := markFrom o d started
+    (.hang n made.1, made.2)
+  | .alt flat stacked, started =>
+    let a := markFrom o flat started
+    let b := markFrom o stacked started
+    (.alt a.1 b.1, a.2 || b.2)
+  | .slot i, started => (.slot i, started)
 
-/-- A doc's lines: the first from column `first`, later ones from the base
-column `col`, marked `mark` unless marked deeper, within a ribbon `ribbon`
-columns wide. Never empty: a doc is at least one line. -/
-partial def lines (ribbon : Nat) (first col : Nat) (mark : Nat) : Doc → Array Line
-  | .text s face => #[#[⟨first, s, face, mark⟩]]
-  | .point face => #[#[⟨first, "", face, mark⟩]]
-  | .row parts =>
-    parts.foldl (fun (acc : Array Line) p =>
-      let last := acc.back!
-      let next := lines ribbon (lineStop first last) col mark p
-      (acc.pop.push (last ++ next[0]!)) ++ next.extract 1 next.size) #[#[]]
-  | .col [] => #[#[]]
-  | .col (d :: rest) => rest.foldl (fun acc p => acc ++ lines ribbon col col mark p) (lines ribbon first col mark d)
-  | .indent n d => lines ribbon (first + n) (col + n) mark d
-  | .hang n d => lines ribbon first (col + n) mark d
-  | .alt flat stacked =>
-    match width? flat with
-    | some w => if first + w ≤ ribbon then lines ribbon first col mark flat else lines ribbon first col mark stacked
-    | none => lines ribbon first col mark stacked
-  | .mark id d => lines ribbon first col id d
+def markAll (o : Occ) : List (Deui.Fit.Doc Span) → Bool → List (Deui.Fit.Doc Span) × Bool
+  | [], started => ([], started)
+  | d :: ds, started =>
+    let first := markFrom o d started
+    let rest := markAll o ds first.2
+    (first.1 :: rest.1, rest.2)
+end
+
+/-- A doc, as an occurrence: everything in it shows `o`, unless it shows
+something deeper. -/
+def marked (o : Occ) (d : Deui.Fit.Doc Span) : Deui.Fit.Doc Span := (markFrom o d false).1
 
 /-- Parts side by side with a separator between them. -/
-def sep (separator : Doc) : List Doc → List Doc
+def sep (separator : Deui.Fit.Doc Span) : List (Deui.Fit.Doc Span) → List (Deui.Fit.Doc Span)
   | [] => []
   | [d] => [d]
   | d :: rest => d :: separator :: sep separator rest
 
 end Doc
 
-/-- A line as plain text, its spans at their columns. -/
+/-- A line as plain text, its spans after its indent. -/
 def Line.plain (l : Line) : String :=
-  l.foldl (fun acc s => acc.pushn ' ' (s.col - acc.length) ++ s.text) ""
+  l.cells.foldl (fun acc s => acc ++ s.text) ("".pushn ' ' l.indent)
+
+/-- A line's spans, each with the column it starts at. -/
+def Line.placed (l : Line) : List (Nat × Span) :=
+  let rec go (col : Nat) : List Span → List (Nat × Span)
+    | [] => []
+    | s :: rest => (col, s) :: go (col + s.text.length) rest
+  go l.indent l.cells
 
 end Progred

@@ -106,9 +106,8 @@ def selectedCell (m : Model) : Option CellId :=
 
 /-- What of the state the parts are drawn with. -/
 def seen (m : Model) : Display.Seen :=
-  let marked := m.selectedCell
-  { selection := m.selection, folds := m.folds, results := m.results, layouts := m.layouts, marked,
-    markedDefined := (marked.bind m.doc.definition?).isSome, ribbon := m.ribbon }
+  { selection := m.selection.filter Display.drawnSelection, folds := m.folds, results := m.results,
+    layouts := m.layouts, ribbon := m.ribbon }
 
 def snapshot (m : Model) : Snapshot := ⟨m.doc, m.selection.map (·.path), m.folds⟩
 
@@ -259,34 +258,48 @@ def fresh (m : Model) : CellId × Model :=
 
 /-! ## What's drawn, in reading order -/
 
-open Display (Block Stop)
-
-/-- The document laid out: its parts, one under another. -/
+/-- The document laid out: its parts' lines, one part under another. -/
 structure Layout where
-  blocks : List Block
+  parts : List (List Line)
+
+/-- Where an occurrence starts, within its part: its line and column. -/
+structure Stop where
+  occ : Occ
+  line : Nat
+  col : Nat
+  /-- Whether it's a place with no width: a point between things. -/
+  point : Bool := false
+  deriving Inhabited
+
+/-- Each occurrence that's drawn in a part, where it starts, in reading
+order. -/
+def stops (lines : List Line) : List Stop :=
+  lines.zipIdx.flatMap fun (l, i) =>
+    l.placed.filterMap fun (col, s) =>
+      if s.start then s.occ.map fun o => ⟨o, i, col, s.text.isEmpty && s.face != .caret⟩ else none
 
 namespace Layout
 
 /-- The document's layout, worked out from nothing. -/
-def of (m : Model) : Layout := ⟨Display.blocks m.doc m.seen⟩
+def of (m : Model) : Layout := ⟨Display.lines m.doc m.seen⟩
 
-def lineCount (l : Layout) : Nat := l.blocks.foldl (fun n b => n + b.lines.size) 0
+def lineCount (l : Layout) : Nat := l.parts.foldl (fun n p => n + p.length) 0
 
 /-- The line a part starts at. -/
-def lineOf (l : Layout) (block : Nat) : Nat :=
-  (l.blocks.take block).foldl (fun n b => n + b.lines.size) 0
+def lineOf (l : Layout) (part : Nat) : Nat :=
+  (l.parts.take part).foldl (fun n p => n + p.length) 0
 
 /-- The part a line is in, and the line within it. -/
-def lineAt (l : Layout) (line : Nat) : Option (Block × Nat) := Id.run do
+def lineAt (l : Layout) (line : Nat) : Option (List Line × Nat) := Id.run do
   let mut rest := line
-  for b in l.blocks do
-    if rest < b.lines.size then return some (b, rest)
-    rest := rest - b.lines.size
+  for p in l.parts do
+    if rest < p.length then return some (p, rest)
+    rest := rest - p.length
   return none
 
 /-- The lines, as plain text. -/
 def plain (l : Layout) : List String :=
-  l.blocks.flatMap fun b => b.lines.toList.map (·.plain)
+  l.parts.flatMap fun p => p.map (·.plain)
 
 end Layout
 
@@ -339,41 +352,51 @@ def select (m : Model) (o : Occ) : Model :=
     | some sel => { m.change (.select (some sel)) with typingRun := false }
     | none => m
 
+/-- The part a selection is drawn in: the one its path is in, or the one
+that draws the entry being added. -/
+def partOf (m : Model) (sel : Selection) : Option Nat :=
+  match Display.notebookEntries? m.doc.root with
+  | none => some 0
+  | some items =>
+    let among (path : Path) : Option Nat :=
+      match path with
+      | [.key k] => if k == Kinds.entries then some items.length else none
+      | .key k :: .element p :: _ => if k == Kinds.entries then items.findIdx? (·.1 == p) else none
+      | _ => none
+    (if sel.path.length ≥ 2 then among sel.path else none).orElse fun _ => sel.anchor.bind among
+
 /-- Where the selection is drawn: its part, and its stop there. -/
 def Layout.here (l : Layout) (m : Model) : Option (Nat × Nat) :=
   m.selection.bind fun sel =>
-    l.blocks.zipIdx.findSome? fun (block, b) =>
-      if block.selection.isNone then none
-      else (block.stops.findIdx? fun s => isSelected sel block.occs[s.occ]!).map (b, ·)
+    (m.partOf sel).bind fun b =>
+      (l.parts[b]?).bind fun lines =>
+        ((stops lines).findIdx? fun s => isSelected sel s.occ).map (b, ·)
 
 def isPlace (k : OccKind) : Bool := k == .value || k == .hole
 def isTabStop (k : OccKind) : Bool := k == .hole || k == .insertion || k == .fieldEnd || k == .entryPoint
 
-/-- The nearest stop after or before a place that `want` accepts, with its
-part: in the same part, else in the parts that follow, or come before. From
-no place, the first of the document, or the last. -/
+/-- The nearest stop after or before a place that `want` accepts: in the
+same part, else in the parts that follow, or come before. From no place,
+the first of the document, or the last. -/
 def Layout.next (l : Layout) (from_ : Option (Nat × Nat)) (forward : Bool) (want : OccKind → Bool) :
-    Option (Block × Stop) :=
-  let wanted (block : Block) (keep : Nat → Bool) : List Stop :=
-    (List.range block.stops.size).filterMap fun i =>
-      let s := block.stops[i]!
-      if keep i && want block.occs[s.occ]!.kind then some s else none
-  let pick (block : Block) (stops : List Stop) : Option (Block × Stop) :=
-    (if forward then stops.head? else stops.getLast?).map (block, ·)
+    Option Stop :=
+  let wanted (lines : List Line) : List Stop := (stops lines).filter fun s => want s.occ.kind
+  let pick (found : List Stop) : Option Stop := if forward then found.head? else found.getLast?
   -- The first of the parts that has one, in the order they're given.
-  let others (blocks : List Block) : Option (Block × Stop) :=
-    blocks.findSome? fun block => pick block (wanted block fun _ => true)
+  let others (parts : List (List Line)) : Option Stop := parts.findSome? fun lines => pick (wanted lines)
   match from_ with
   | some (b, i) =>
-    ((l.blocks[b]?).bind fun block => pick block (wanted block fun j => if forward then j > i else j < i)).orElse
-      fun _ => others (if forward then l.blocks.drop (b + 1) else (l.blocks.take b).reverse)
-  | none => others (if forward then l.blocks else l.blocks.reverse)
+    ((l.parts[b]?).bind fun lines =>
+      let all := stops lines
+      pick ((if forward then all.drop (i + 1) else all.take i).filter fun s => want s.occ.kind)).orElse
+      fun _ => others (if forward then l.parts.drop (b + 1) else (l.parts.take b).reverse)
+  | none => others (if forward then l.parts else l.parts.reverse)
 
 /-- The selection moved to the next or previous thing drawn. -/
 def step (laid : Model → Layout) (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Model :=
   let l := laid m
   match l.next (l.here m) forward want with
-  | some (block, s) => m.select block.occs[s.occ]!
+  | some s => m.select s.occ
   | none => if want .insertion then m.change (.select none) else m
 
 /-- The selection moved to the nearest line above or below with something
@@ -383,24 +406,24 @@ def stepLine (laid : Model → Layout) (m : Model) (down : Bool) : Model :=
   match l.here m with
   | none => m.step laid true
   | some (b, i) =>
-    match l.blocks[b]? with
+    match l.parts[b]? with
     | none => m
-    | some block =>
-      let here := block.stops[i]!
+    | some lines =>
+      let all := stops lines
+      let here := all[i]!
       -- The places of a part, among those `keep` accepts.
-      let places (block : Block) (keep : Stop → Bool) : List Stop :=
-        block.stops.toList.filter fun s => isPlace block.occs[s.occ]!.kind && keep s
+      let places (lines : List Line) (keep : Stop → Bool) : List Stop :=
+        (stops lines).filter fun s => isPlace s.occ.kind && keep s
       let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
-      let nearest (block : Block) (stops : List Stop) : Option (Block × Stop) :=
-        ((if down then stops.head? else stops.getLast?).map fun near =>
-          (stops.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near).map
-          (block, ·)
+      let nearest (found : List Stop) : Option Stop :=
+        (if down then found.head? else found.getLast?).map fun near =>
+          (found.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near
       let target :=
-        (nearest block (places block fun s => if down then s.line > here.line else s.line < here.line)).orElse
-          fun _ => (if down then l.blocks.drop (b + 1) else (l.blocks.take b).reverse).findSome? fun other =>
-            nearest other (places other fun _ => true)
+        (nearest (places lines fun s => if down then s.line > here.line else s.line < here.line)).orElse
+          fun _ => (if down then l.parts.drop (b + 1) else (l.parts.take b).reverse).findSome? fun other =>
+            nearest (places other fun _ => true)
       match target with
-      | some (block, s) => m.select block.occs[s.occ]!
+      | some s => m.select s.occ
       | none => m
 
 /-- The scroll that keeps the selection's line in the window. -/
@@ -408,7 +431,7 @@ def revealed (l : Layout) (m : Model) : Model :=
   match l.here m with
   | none => m
   | some (b, i) =>
-    let top := (l.lineOf b + ((l.blocks[b]?).map (·.stops[i]!.line)).getD 0) * lineHeight
+    let top := (l.lineOf b + ((l.parts[b]?).map fun lines => ((stops lines)[i]?.map (·.line)).getD 0).getD 0) * lineHeight
     let room := m.height - 2 * margin
     if top < m.scroll then m.change (.scroll top)
     else if top + lineHeight > m.scroll + room then m.change (.scroll (top + lineHeight - room))

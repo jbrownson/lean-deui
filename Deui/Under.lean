@@ -24,9 +24,9 @@ def under.refresh (g : Cached (prod cc (runs ca)) (runs cb)) (d : cc.Edit) :
     Nat → List g.Cache → List (Edit.of (runs cb)) × List g.Cache
   | _, [] => ([], [])
   | i, k :: ks =>
-    (if (g.df k (d, [])).1.isEmpty then (under.refresh g d (i + 1) ks).1
-      else .update i (g.df k (d, [])).1 :: (under.refresh g d (i + 1) ks).1,
-      (g.df k (d, [])).2 :: (under.refresh g d (i + 1) ks).2)
+    let made := g.df k (d, [])
+    let rest := under.refresh g d (i + 1) ks
+    (if made.1.isEmpty then rest.1 else .update i made.1 :: rest.1, made.2 :: rest.2)
 
 /-- One edit of the list, under a context: an element put in is worked out
 from nothing, and one edited is given its edit with a context edit that
@@ -38,15 +38,18 @@ def under.edit (g : Cached (prod cc (runs ca)) (runs cb)) (c : cc.Value) (idle :
   | .update i es =>
     match ks[i]? with
     | .none => ([], ks)
-    | .some k => ([.update i (g.df k (idle, es)).1], update (latest g.Cache) ks i (g.df k (idle, es)).2)
+    | .some k =>
+      let made := g.df k (idle, es)
+      ([.update i made.1], update (latest g.Cache) ks i made.2)
 
 /-- A run of edits of the list. -/
 def under.edits (g : Cached (prod cc (runs ca)) (runs cb)) (c : cc.Value) (idle : cc.Edit) :
     List (Edit.of (runs ca)) → List g.Cache → List (Edit.of (runs cb)) × List g.Cache
   | [], ks => ([], ks)
   | e :: es, ks =>
-    ((under.edit g c idle ks e).1 ++ (under.edits g c idle es (under.edit g c idle ks e).2).1,
-      (under.edits g c idle es (under.edit g c idle ks e).2).2)
+    let made := under.edit g c idle ks e
+    let rest := under.edits g c idle es made.2
+    (made.1 ++ rest.1, rest.2)
 
 /-- A list mapped under a context by `g`, which keeps what it needs for
 each element. `idle c` is a context edit that leaves `c` as it is, and

@@ -69,7 +69,7 @@ def main (args : List String) : IO Unit := do
         lines := lines + (Model.Layout.of { model with scroll := i }).lineCount
       let t1 ← IO.monoNanosNow
       let l := Model.Layout.of model
-      IO.println s!"{path}: {l.lineCount} lines in {l.blocks.length} parts"
+      IO.println s!"{path}: {l.lineCount} lines in {l.parts.length} parts"
       IO.println s!"  laid out from nothing: {(t1 - t0) / 10 / 1000} µs"
       let t2 ← IO.monoNanosNow
       let m : M := App.start Editor.app model

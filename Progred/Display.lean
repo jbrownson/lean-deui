@@ -4,12 +4,18 @@ import Progred.GidText
 import Progred.Layout
 
 /-!
-The projection: a document as a `Doc`, with every drawn thing an
+The projection: a document as a tree of frames, each a value drawn where it
+is, with the values inside it as its kids. Every drawn thing is an
 occurrence, so a selection, an arrow key or a click finds its place. A
 value is drawn by the first form that takes it: a literal, the form of its
 kind (notebook, section, evaluation, lambda, call, value wrapper), the
 generic `kind name {fields}`, else raw: `(cell)`, `[list]`, `{record}`,
 `0xblob`.
+
+A frame is drawn from little: its value with what's inside its lists and
+records left out, the definitions it looks up, and what of the selection
+is at it. So a change deep in a value leaves the frames above it as they
+were, and what's typed changes the one frame it's typed in.
 -/
 
 namespace Progred
@@ -36,34 +42,6 @@ structure Selection where
   /-- For an entry being added to the root notebook: the path of the entry
   it's before, or of the entries for one at their end. Its part draws it. -/
   anchor : Option Path := none
-  deriving DecidableEq, Inhabited
-
-inductive OccKind where
-  /-- A value, where it is drawn. -/
-  | value
-  /-- A place for a value, with none. -/
-  | hole
-  /-- A place between a list's elements; its path is where a new element
-  would go. -/
-  | insertion
-  /-- The end of a record, where a field is added; its path is the record's. -/
-  | fieldEnd
-  /-- A field's label; its path is the field's value's. -/
-  | label
-  /-- A result: computed, not stored. -/
-  | computed
-  /-- A place to add an entry of the root notebook: before the entry at its
-  path, or at the entries' end for their path. -/
-  | entryPoint
-  deriving DecidableEq, Inhabited, Repr
-
-structure Occ where
-  path : Path
-  kind : OccKind
-  /-- Whether an evaluation's error is about this value. -/
-  failed : Bool := false
-  /-- The cell it is: a value that's a cell, or a label. -/
-  cell : Option CellId := none
   deriving DecidableEq, Inhabited
 
 /-- What an evaluation gave: a value and its type, or what went wrong, and
@@ -126,31 +104,102 @@ partial def Node.read (v : Value) : Option Node := do
 
 namespace Display
 
-/-- What drawing gathers: the occurrences, and the paths evaluations'
-errors are about, noted before what's there is drawn. -/
-structure Drawn where
-  occs : Array Occ := #[]
+/-- How a kid is drawn, as its place asks. -/
+inductive Hint where
+  /-- A value; `plain` if it's a field of a record with no kind, where a
+  cell opens. -/
+  | value (plain : Bool := false)
+  /-- A record's name, typed in place; without one, `missing`. -/
+  | name (missing : String)
+  /-- A lambda's parameters, and one of them. -/
+  | params
+  | param
+  /-- A parameter's definition, of which its type is drawn. -/
+  | paramType
+  /-- A notebook's entries, and a section's body. -/
+  | entries
+  | body
+  /-- The label being typed for a new field, at the record it's added to. -/
+  | label
+  /-- A part of the document: an entry of the root notebook, held as a
+  list of the one; and the end of its entries. -/
+  | entry (position : Position)
+  | end_
+  deriving DecidableEq, Inhabited
+
+/-- Whether a frame drawn this way is where a selection at its path, in a
+stage, is typed. -/
+def Hint.listens : Hint → Stage → Bool
+  | .label, .label => true
+  | .label, _ => false
+  | _, .label => false
+  | _, _ => true
+
+/-- A frame's kid: the step to it, none for one at the frame's own path;
+how it's drawn; and the paths errors are about, among which it may be. -/
+structure Kid where
+  step : Option Step
+  hint : Hint := .value
   errors : List Path := []
-  /-- Whether the value about to be drawn is a field of a record with no
-  kind, where a cell opens. -/
-  inPlain : Bool := false
+  deriving DecidableEq, Inhabited
 
-abbrev M := StateM Drawn
+/-- What a frame is of: where it is, how it's drawn, and its value. -/
+structure Seed where
+  path : Path
+  hint : Hint := .value
+  errors : List Path := []
+  value : Option Value
+  deriving Inhabited
 
-/-- A doc, marked as an occurrence. -/
-def occ (path : Path) (kind : OccKind) (d : Doc) (cell : Option CellId := none) : M Doc := do
-  modify fun st => { st with occs := st.occs.push ⟨path, kind, kind == .value && st.errors.contains path, cell⟩ }
-  return .mark (← get).occs.size d
+/-- What a frame reads of its whole value, where a form needs it: what an
+evaluation gave, and the layout a record's kind draws it with. -/
+structure Deep where
+  outcome : Option Outcome := none
+  node : Option Node := none
 
-def t (s : String) (face : Face := .ink) : Doc := .text s face
-def delim (s : String) : Doc := .text s .delimiter
-def dim (s : String) : Doc := .text s .dim
+/-- A value with what's inside it left out. -/
+def emptied : Value → Value
+  | .list _ => .list []
+  | .record _ => .record []
+  | v => v
+
+/-- A value with what's inside its elements and fields left out: all of
+its value that a frame is drawn from. -/
+def shallow : Value → Value
+  | .list items => .list (items.map fun (p, v) => (p, emptied v))
+  | .record fields => .record (fields.map fun (l, v) => (l, emptied v))
+  | v => v
+
+/-- The selection, as a frame sees it: only if it's at the frame or under
+it, and with what's being typed only where it's typed. Elsewhere a frame
+sees that something is typed, and no more. -/
+def seen (sel : Selection) (path : Path) (hint : Hint) : Option Selection :=
+  if path.isPrefixOf sel.path then
+    some { sel with editing :=
+      if sel.path == path && hint.listens sel.stage then sel.editing
+      else sel.editing.map fun e => { text := "", caret := 0, picker := e.picker } }
+  else none
+
+/-- A frame's doc is built with its kids gathered as they're placed. -/
+abbrev B := StateM (Array Kid)
+
+variable (s : Shown) (errors : List Path)
+
+/-- A kid a step in: a slot in the doc, for the frame drawn there. -/
+def kid (step : Step) (hint : Hint := .value) (about : List Path := errors) : B Doc :=
+  modifyGet fun kids => (.slot kids.size, kids.push { step := some step, hint, errors := about })
+
+/-- A kid at the frame's own path. -/
+def kidHere (hint : Hint) : B Doc :=
+  modifyGet fun kids => (.slot kids.size, kids.push { step := none, hint, errors })
+
+/-- A doc, as an occurrence. -/
+def occ (path : Path) (kind : OccKind) (d : Doc) (cell : Option CellId := none) : Doc :=
+  Doc.marked ⟨path, kind, kind == .value && errors.contains path, cell⟩ d
 
 /-- The text being typed, with its caret. -/
 def typing (e : Editing) (face : Face) : Doc :=
-  .row [.text (e.text.take e.caret).toString face, .point .caret, .text (e.text.drop e.caret).toString face]
-
-variable (s : Shown)
+  .row [t (e.text.take e.caret).toString face, point .caret, t (e.text.drop e.caret).toString face]
 
 /-- The editing at a path, if the selection is typing there in `stage`. -/
 def editingAt (path : Path) (stage : Stage) : Option Editing :=
@@ -165,13 +214,13 @@ def pendingAt (path : Path) : Bool :=
   | none => false
 
 /-- A hole: a place with no value, or the query being typed into it. -/
-def hole (path : Path) : M Doc :=
+def hole (path : Path) : Doc :=
   match editingAt s path .pending with
-  | some e => occ path .hole (.row [typing e .ink])
+  | some e => occ errors path .hole (.row [typing e .ink])
   | none =>
     match editingAt s path .edge with
-    | some e => occ path .hole (.row [typing e .ink])
-    | none => occ path .hole (dim "_")
+    | some e => occ errors path .hole (.row [typing e .ink])
+    | none => occ errors path .hole (dim "_")
 
 /-- The layout a kind's records are drawn with, for a record: its def's
 projection, if that's a layout, or a function that has given this record
@@ -239,91 +288,28 @@ def brief (message : String) : String :=
       " ".intercalate ((first :: more).map (·.trimAscii.toString))
   if line.length > 140 then (line.take 139).toString ++ "…" else line
 
-mutual
-
-/-- A value at a path, or the hole where there is none. -/
-partial def value (path : Path) (v? : Option Value) : M Doc := do
-  let plain ← modifyGet fun st => (st.inPlain, { st with inPlain := false })
-  match v? with
-  | none => hole s path
-  | some v =>
-    let cell := match v with
-      | .cell c => some c
-      | _ => none
-    -- A picker over a value shows its query in the value's place.
-    match editingAt s path .edge with
-    | some e =>
-      if e.picker then occ path .value (.row [typing e .ink]) cell
-      else
-        let inner ← line path v (some e)
-        occ path .value inner cell
-    | none =>
-      let inner ← drawn path v plain
-      occ path .value inner cell
-
 /-- A value drawn as a line, being typed in or not: text in quotes, a
 number as its digits. -/
-partial def line (_path : Path) (v : Value) (e : Option Editing) : M Doc := do
+def line (v : Value) (e : Option Editing) : Doc :=
   let content (face : Face) (shown : String) : Doc :=
     match e with
     | some e => typing e face
-    | none => .text shown face
+    | none => t shown face
   match v.text? with
-  | some str => return .row [.text "\"" .string, content .string str, .text "\"" .string]
+  | some str => .row [t "\"" .string, content .string str, t "\"" .string]
   | none =>
     match v.u64? with
-    | some n => return content .number (toString n)
+    | some n => content .number (toString n)
     | none =>
       match v.f64? with
-      | some x => return .row [content .number (number x), dim "f64"]
-      | none => return content .ink ""
-
-partial def drawn (path : Path) (v : Value) (plain : Bool) : M Doc := do
-  match v with
-  | .cell c => cell path c plain
-  | .blob b => return .text (GidText.hex b) .number
-  | .list items => list path items
-  | .record fields =>
-    if (v.text?.isSome || v.u64?.isSome || v.f64?.isSome) && fields.length == 2 then line path v none
-    else if v.literal? Kinds.bool == some [1] then return t "true" .name
-    else if v.literal? Kinds.bool == some [0] then return t "false" .name
-    else
-      match v.kind? with
-      | some k =>
-        if k == Kinds.notebook then notebook path v
-        else if k == Kinds.section_ then section_ path v
-        else if k == Kinds.evaluation then evaluation path v
-        else if k == Kinds.lambda then lambda path v
-        else if k == Kinds.call then call path v
-        else if k == Kinds.valueWrapper then
-          return .row [← nameOf path v "name", t " = ", ← value (path ++ [.key Kinds.value]) (v.field? Kinds.value)]
-        else
-          match projection s k v with
-          | some node => layout path v node
-          | none => kinded path k fields
-      | none => record path fields
-
-/-- A record, drawn by a layout: its parts are the record's own, at their
-fields, so they're edited where they're drawn. -/
-partial def layout (path : Path) (v : Value) : Node → M Doc
-  | .row children => return .row (← children.mapM (layout path v))
-  | .column children => return .col (← children.mapM (layout path v))
-  | .indent child => return .indent 2 (← layout path v child)
-  | .either children => do
-    let drawn ← children.mapM (layout path v)
-    return match drawn.reverse with
-      | [] => .row []
-      | last :: before => before.foldl (fun rest d => .alt d rest) last
-  | .words content => return t content
-  | .faint content => return dim content
-  | .part field => value (path ++ [.key field]) (v.field? field)
+      | some x => .row [content .number (number x), dim "f64"]
+      | none => content .ink ""
 
 /-- A cell: open, its definition in parentheses; closed, its name, or its
 kind and short id. -/
-partial def cell (path : Path) (c : CellId) (plain : Bool) : M Doc := do
+def cell (path : Path) (c : CellId) (plain : Bool) : B Doc := do
   if isOpen s path c plain then
-    let inner ← value (path ++ [.follow]) (s.doc.lookup? s.library c)
-    return .row [delim "(", inner, delim ")"]
+    return .row [delim "(", ← kid errors .follow, delim ")"]
   else
     match s.doc.name? s.library c with
     | some n => return t n .name
@@ -332,10 +318,10 @@ partial def cell (path : Path) (c : CellId) (plain : Bool) : M Doc := do
       | some k => return .row [delim "(", t (s.doc.shown s.library k) .name, dim (" " ++ c.short), delim ")"]
       | none => return dim c.short
 
-/-- A list's elements, each drawn by `draw`, with a place to insert before
-each and after the last, and the hole of an element being added. -/
-partial def elements (path : Path) (items : List (Position × Value)) (draw : Path → Option Value → M Doc) :
-    M (List Doc) := do
+/-- A list's elements, each a kid drawn as `hint` asks, with a place to
+insert before each and after the last, and the hole of an element being
+added. -/
+def elements (path : Path) (items : List (Position × Value)) (hint : Hint := .value) : B (List Doc) := do
   -- The element being added, if the selection is pending in this list.
   let pending : Option Position :=
     match s.selection with
@@ -346,183 +332,137 @@ partial def elements (path : Path) (items : List (Position × Value)) (draw : Pa
         | _ => none
       else none
     | none => none
-  let all : List (Position × Option Value) :=
+  -- Each position, and whether an element is there.
+  let all : List (Position × Bool) :=
     match pending with
     | some p =>
       let before := items.filter fun (q, _) => Position.lt q p
       let after := items.filter fun (q, _) => !Position.lt q p
-      before.map (fun (q, v) => (q, some v)) ++ [(p, none)] ++ after.map fun (q, v) => (q, some v)
-    | none => items.map fun (q, v) => (q, some v)
-  let positions := all.map (·.1)
-  let insertion (before after : Option Position) : M Doc :=
-    occ (path ++ [.element (Position.between before after)]) .insertion (.point .ink)
+      before.map (fun (q, _) => (q, true)) ++ [(p, false)] ++ after.map fun (q, _) => (q, true)
+    | none => items.map fun (q, _) => (q, true)
+  let insertion (before after : Option Position) : Doc :=
+    occ errors (path ++ [.element (Position.between before after)]) .insertion (point .ink)
   -- The hole of an element being added is its own place: no insertion
   -- point is drawn beside it.
-  let rec go (prev : Option (Position × Bool)) : List (Position × Option Value) → M (List Doc)
+  let rec go (prev : Option (Position × Bool)) : List (Position × Bool) → B (List Doc)
     | [] => return []
-    | (p, v) :: rest => do
-      let none_ := Doc.row []
-      let beside := v.isNone || (prev.map (·.2)).getD false
-      let point ← if beside then pure none_ else insertion (prev.map (·.1)) (some p)
-      let item ← draw (path ++ [.element p]) v
-      let last ← if rest.isEmpty && v.isSome then insertion (some p) none else pure none_
-      return .row [point, item, last] :: (← go (some (p, v.isNone)) rest)
-  if all.isEmpty then return [← insertion none none]
-  else
-    let _ := positions
-    go none all
+    | (p, there) :: rest => do
+      let none_ : Doc := .row []
+      let beside := !there || (prev.map (·.2)).getD false
+      let point := if beside then none_ else insertion (prev.map (·.1)) (some p)
+      let item ← kid errors (.element p) hint
+      let last := if rest.isEmpty && there then insertion (some p) none else none_
+      return .row [point, item, last] :: (← go (some (p, !there)) rest)
+  if all.isEmpty then return [insertion none none]
+  else go none all
 
-partial def list (path : Path) (items : List (Position × Value)) : M Doc := do
-  let parts ← elements path items value
+def list (path : Path) (items : List (Position × Value)) : B Doc := do
+  let parts ← elements s errors path items
   return container "[" "]" parts parts
 
-/-- A field: its label, then its value beside it, or below it indented. -/
-partial def field (path : Path) (label : CellId) (v : Option Value) (plain : Bool := false) : M Doc := do
+/-- A field: its label, then its value beside it. -/
+def field (path : Path) (label : CellId) (plain : Bool := false) : B Doc := do
   let at_ := path ++ [.key label]
-  let name ← occ at_ .label (t (s.doc.shown s.library label) .label) (some label)
-  if plain then modify fun st => { st with inPlain := true }
-  let inner ← value at_ v
-  return .row [name, dim ": ", inner]
+  let name := occ errors at_ .label (t (s.doc.shown s.library label) .label) (some label)
+  return .row [name, dim ": ", ← kid errors (.key label) (.value plain)]
 
 /-- The label being typed for a new field, if the selection is adding one
-to the record at a path. -/
-partial def newLabel (path : Path) : M (List Doc) := do
-  match editingAt s path .label with
-  | some e => return [.row [← occ path .fieldEnd (typing e .label), dim ": ", dim "_"]]
-  | none => return []
+to the record at a path: a kid at the record's own path. -/
+def newLabel (path : Path) : B (List Doc) := do
+  if (editingAt s path .label).isSome then return [← kidHere errors .label] else return []
 
 /-- A raw record: `{label: value, …}`, with a place at its end to add a
 field. -/
-partial def record (path : Path) (fields : List (CellId × Value)) : M Doc := do
-  let shown ← (ordered s fields).mapM fun (l, v) => field path l (some v) (plain := true)
-  let adding ← newLabel path
-  let end_ ← if adding.isEmpty then pure [← occ path .fieldEnd (.point .ink)] else pure []
+def record (path : Path) (fields : List (CellId × Value)) : B Doc := do
+  let shown ← (ordered s fields).mapM fun (l, _) => field s errors path l (plain := true)
+  let adding ← newLabel s errors path
+  let end_ := if adding.isEmpty then [occ errors path .fieldEnd (point .ink)] else []
   let parts := shown ++ adding
-  let flat := Doc.row ([delim "{"] ++ Doc.sep (dim ", ") parts ++ end_ ++ [delim "}"])
+  let flat : Doc := .row ([delim "{"] ++ Doc.sep (dim ", ") parts ++ end_ ++ [delim "}"])
   -- Stacked, the place to add a field rides at the end of the last field's line.
-  let lines := match parts.reverse with
-    | last :: before => before.reverse ++ [Doc.row (last :: end_)]
+  let lines : List Doc := match parts.reverse with
+    | last :: before => before.reverse ++ [.row (last :: end_)]
     | [] => end_
-  let stacked := Doc.col [delim "{", .indent 2 (.col lines), delim "}"]
+  let stacked : Doc := .col [delim "{", .indent 2 (.col lines), delim "}"]
   return .alt flat stacked
 
-/-- A record's name, typed in place; without one, `missing` in its place. -/
-partial def nameOf (path : Path) (v : Value) (missing : String) : M Doc := do
-  let at_ := path ++ [.key Kinds.name]
-  let bare (e : Option Editing) (shown : String) : Doc :=
-    match e with
-    | some e => typing e .name
-    | none => .text shown .name
-  match editingAt s at_ .edge, editingAt s at_ .pending with
-  | some e, _ => occ at_ .value (bare (some e) "")
-  | _, some e => occ at_ .hole (bare (some e) "")
-  | none, none =>
-    match (v.field? Kinds.name).bind Value.text? with
-    | some n => if n.isEmpty then occ at_ .value (dim missing) else occ at_ .value (bare none n)
-    | none => occ at_ .hole (dim missing)
+/-- A record's name, typed in place: a kid. -/
+def nameOf (missing : String) : B Doc := kid errors (.key Kinds.name) (.name missing)
 
 /-- The fields a kind's records show: its definition's, in order. -/
-partial def fieldsOf (k : CellId) : List CellId :=
+def fieldsOf (k : CellId) : List CellId :=
   match (s.doc.lookup? s.library k).bind (·.field? Kinds.fields) with
   | some (.list items) => items.filterMap fun (_, v) => match v with | .cell c => some c | _ => none
   | _ => []
 
 /-- A record of a kind: `kind name {fields}`, its kind's fields first, each
 a hole where missing, then the rest. -/
-partial def kinded (path : Path) (k : CellId) (fields : List (CellId × Value)) : M Doc := do
+def kinded (path : Path) (k : CellId) (fields : List (CellId × Value)) : B Doc := do
   let v := Value.record fields
-  let declared := (fieldsOf k).filter (· != Kinds.name)
-  let hasName := (fieldsOf k).contains Kinds.name || (v.field? Kinds.name).isSome
+  let declared := (fieldsOf s k).filter (· != Kinds.name)
+  let hasName := (fieldsOf s k).contains Kinds.name || (v.field? Kinds.name).isSome
   let rest := (ordered s fields).filter fun (l, _) =>
     l != Kinds.isa && l != Kinds.name && !declared.contains l
-  let slots ← declared.mapM fun l => field path l (v.field? l)
-  let others ← rest.mapM fun (l, w) => field path l (some w)
-  let adding ← newLabel path
+  let slots ← declared.mapM fun l => field s errors path l
+  let others ← rest.mapM fun (l, _) => field s errors path l
+  let adding ← newLabel s errors path
   let parts := slots ++ others ++ adding
-  let name ← if hasName then pure [t " ", ← nameOf path v "name"] else pure []
+  let name ← if hasName then pure [t " ", ← nameOf errors "name"] else pure []
   let head := [t (s.doc.shown s.library k) .name] ++ name
-  let flat := Doc.row (head ++ [delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
-  let stacked := Doc.col [.row (head ++ [delim " {"]), .indent 2 (.col parts), delim "}"]
+  let flat : Doc := .row (head ++ [delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
+  let stacked : Doc := .col [.row (head ++ [delim " {"]), .indent 2 (.col parts), delim "}"]
   if parts.isEmpty then return .row head else return .alt flat stacked
 
-/-- A notebook: its entries one under another, numbered. -/
-partial def notebook (path : Path) (v : Value) : M Doc := do
-  let at_ := path ++ [.key Kinds.entries]
+/-- A notebook: its entries, a kid; one with no list of them, as a field. -/
+def notebook (path : Path) (v : Value) : B Doc := do
   match v.field? Kinds.entries with
-  | some (.list items) =>
-    let parts ← elements at_ items value
-    let numbered := (List.range parts.length).zip parts |>.map fun (i, d) =>
-      Doc.row [dim (toString (i + 1) ++ (if i < 9 then "  " else " ")), d]
-    return .col (Doc.sep (t "") numbered)
-  | other => return .row [t "notebook " .name, ← field path Kinds.entries other]
+  | some (.list _) => kid errors (.key Kinds.entries) .entries
+  | _ => return .row [t "notebook " .name, ← field s errors path Kinds.entries]
 
 /-- A section: its name over its body, indented. -/
-partial def section_ (path : Path) (v : Value) : M Doc := do
-  let head := Doc.row [dim "▾ ", ← nameOf path v "section"]
-  let at_ := path ++ [.key Kinds.sectionBody]
+def section_ (v : Value) : B Doc := do
+  let head : Doc := .row [dim "▾ ", ← nameOf errors "section"]
   match v.field? Kinds.sectionBody with
-  | some (.list items) =>
-    return .col [head, .indent 2 (.col (← elements at_ items value))]
-  | other => return .col [head, .indent 2 (← value at_ other)]
+  | some (.list _) => return .col [head, .indent 2 (← kid errors (.key Kinds.sectionBody) .body)]
+  | _ => return .col [head, .indent 2 (← kid errors (.key Kinds.sectionBody))]
 
 /-- An evaluation: its expression, then what it gives. -/
-partial def evaluation (path : Path) (v : Value) : M Doc := do
+def evaluation (path : Path) (outcome : Option Outcome) : B Doc := do
   let at_ := path ++ [.key Kinds.expression]
-  let outcome : Option Outcome :=
-    (v.field? Kinds.expression).bind fun e => (s.results.find? (·.1 == e)).map (·.2)
-  match outcome with
-  | some (Outcome.failed _ (some rel)) => modify fun st => { st with errors := (at_ ++ rel) :: st.errors }
-  | _ => pure ()
-  let expression ← value at_ (v.field? Kinds.expression)
+  let about := match outcome with
+    | some (Outcome.failed _ (some rel)) => (at_ ++ rel) :: errors
+    | _ => errors
+  let expression ← kid errors (.key Kinds.expression) .value about
   let result : Doc :=
     match outcome with
     | some (.value shown type) =>
-      if shown.isEmpty then .row [.text type .dim] else .row [.text shown .result, .text (" : " ++ type) .dim]
-    | some (.failed message _) => .text (brief message) .error
+      if shown.isEmpty then .row [t type .dim] else .row [t shown .result, t (" : " ++ type) .dim]
+    | some (.failed message _) => t (brief message) .error
     | none => dim "…"
-  let marked ← occ (path ++ [.key Kinds.evaluation]) .computed result
-  let flat := Doc.row [expression, dim " → ", marked]
-  let stacked := Doc.col [expression, .indent 2 (.row [dim "→ ", marked])]
+  let marked := occ errors (path ++ [.key Kinds.evaluation]) .computed result
+  let flat : Doc := .row [expression, dim " → ", marked]
+  let stacked : Doc := .col [expression, .indent 2 (.row [dim "→ ", marked])]
   return .alt flat stacked
-
-/-- A parameter: its name, and its type if it has one, or one is being
-given. -/
-partial def param (path : Path) (v : Option Value) : M Doc := do
-  match v, editingAt s path .edge with
-  | some (.cell c), none =>
-    modify fun st => { st with inPlain := false }
-    let typePath := path ++ [.follow, .key Kinds.type_]
-    let type := (s.doc.lookup? s.library c).bind (·.field? Kinds.type_)
-    let typed ← if type.isSome || pendingAt s typePath then pure [dim ": ", ← value typePath type] else pure []
-    occ path .value (.row (t (s.doc.shown s.library c) .name :: typed)) (some c)
-  | _, _ => value path v
 
 /-- A lambda: `name [params] → body`, with what it returns after the
 parameters if it says, or is being told. -/
-partial def lambda (path : Path) (v : Value) : M Doc := do
-  let name ← nameOf path v "λ"
-  let paramsPath := path ++ [.key Kinds.params]
-  let params ← match v.field? Kinds.params with
-    | some (.list items) =>
-      if (editingAt s paramsPath .edge).isSome then value paramsPath (v.field? Kinds.params)
-      else
-        let parts ← elements paramsPath items param
-        occ paramsPath .value (container "[" "]" parts parts)
-    | other => value paramsPath other
+def lambda (path : Path) (v : Value) : B Doc := do
+  let name ← nameOf errors "λ"
+  let params ← kid errors (.key Kinds.params) .params
   let returnsPath := path ++ [.key Kinds.returns]
   let returns ←
     if (v.field? Kinds.returns).isSome || pendingAt s returnsPath then
-      pure [dim " : ", ← value returnsPath (v.field? Kinds.returns)]
+      pure [dim " : ", ← kid errors (.key Kinds.returns)]
     else pure []
-  let body ← value (path ++ [.key Kinds.body]) (v.field? Kinds.body)
+  let body ← kid errors (.key Kinds.body)
   let head := [name, t " ", params] ++ returns
-  let flat := Doc.row (head ++ [dim " → ", body])
-  let stacked := Doc.col [.row (head ++ [dim " →"]), .indent 2 body]
+  let flat : Doc := .row (head ++ [dim " → ", body])
+  let stacked : Doc := .col [.row (head ++ [dim " →"]), .indent 2 body]
   return .alt flat stacked
 
 /-- A call: the function, then its arguments by parameter; a function
 written between two arguments goes between them. -/
-partial def call (path : Path) (v : Value) : M Doc := do
+def call (path : Path) (v : Value) : B Doc := do
   let fn := v.field? Kinds.function
   let params : List CellId :=
     match fn with
@@ -536,107 +476,245 @@ partial def call (path : Path) (v : Value) : M Doc := do
     | _ => none
   match symbol, params with
   | some sym, [a, b] =>
-    let left ← value (path ++ [.key a]) (v.field? a)
-    let right ← value (path ++ [.key b]) (v.field? b)
-    let op ← occ (path ++ [.key Kinds.function]) .value (dim (" " ++ sym ++ " "))
+    let left ← kid errors (.key a)
+    let right ← kid errors (.key b)
+    let op := occ errors (path ++ [.key Kinds.function]) .value (dim (" " ++ sym ++ " "))
     return .row [delim "(", left, op, right, delim ")"]
   | _, _ =>
-    let head ← value (path ++ [.key Kinds.function]) fn
-    let args ← params.mapM fun p => field path p (v.field? p)
+    let head ← kid errors (.key Kinds.function)
+    let args ← params.mapM fun p => field s errors path p
     let extra : List (CellId × Value) := match v with
       | .record fields => (ordered s fields).filter fun (l, _) =>
           l != Kinds.isa && l != Kinds.function && !params.contains l
       | _ => []
-    let others ← extra.mapM fun (l, w) => field path l (some w)
-    let adding ← newLabel path
+    let others ← extra.mapM fun (l, _) => field s errors path l
+    let adding ← newLabel s errors path
     let parts := args ++ others ++ adding
-    let flat := Doc.row ([head, delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
-    let stacked := Doc.col [.row [head, delim " {"], .indent 2 (.col parts), delim "}"]
+    let flat : Doc := .row ([head, delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
+    let stacked : Doc := .col [.row [head, delim " {"], .indent 2 (.col parts), delim "}"]
     if parts.isEmpty then return .row [head, delim " {}"] else return .alt flat stacked
 
-end
+/-- A record, drawn by a layout: its parts are the record's own, at their
+fields, so they're edited where they're drawn. -/
+partial def layout : Node → B Doc
+  | .row children => return .row (← children.mapM layout)
+  | .column children => return .col (← children.mapM layout)
+  | .indent child => return .indent 2 (← layout child)
+  | .either children => do
+    let drawn ← children.mapM layout
+    return match drawn.reverse with
+      | [] => .row []
+      | last :: before => before.foldl (fun rest d => .alt d rest) last
+  | .words content => return t content
+  | .faint content => return dim content
+  | .part field => kid errors (.key field)
 
-/-! ## Parts
+/-- A value, by the first form that takes it. -/
+def drawn (path : Path) (v : Value) (plain : Bool) (deep : Deep) : B Doc := do
+  match v with
+  | .cell c => cell s errors path c plain
+  | .blob b => return t (GidText.hex b) .number
+  | .list items => list s errors path items
+  | .record fields =>
+    if (v.text?.isSome || v.u64?.isSome || v.f64?.isSome) && fields.length == 2 then return line v none
+    else if v.literal? Kinds.bool == some [1] then return t "true" .name
+    else if v.literal? Kinds.bool == some [0] then return t "false" .name
+    else
+      match v.kind? with
+      | some k =>
+        if k == Kinds.notebook then notebook s errors path v
+        else if k == Kinds.section_ then section_ errors v
+        else if k == Kinds.evaluation then evaluation errors path deep.outcome
+        else if k == Kinds.lambda then lambda s errors path v
+        else if k == Kinds.call then call s errors path v
+        else if k == Kinds.valueWrapper then
+          return .row [← nameOf errors "name", t " = ", ← kid errors (.key Kinds.value)]
+        else
+          match deep.node with
+          | some node => layout errors node
+          | none => kinded s errors path k fields
+      | none => record s errors path fields
 
-The document is drawn in parts, one under another: each entry of a notebook
-at the root is one, and any other root is one on its own. A part is laid
-out from an `Input`, which holds all the part depends on: its value, the
-definitions it reaches, and the selection, folds and results that touch
-it. So a part whose input is as it was is as it was, and is laid out again
-only when its input changes. -/
+/-- A value at a path, or the hole where there is none. -/
+def value (path : Path) (v? : Option Value) (plain : Bool) (deep : Deep) : B Doc := do
+  match v? with
+  | none => return hole s errors path
+  | some v =>
+    let cell := match v with
+      | .cell c => some c
+      | _ => none
+    -- A picker over a value shows its query in the value's place.
+    match editingAt s path .edge with
+    | some e =>
+      if e.picker then return occ errors path .value (.row [typing e .ink]) cell
+      else return occ errors path .value (line v (some e)) cell
+    | none => return occ errors path .value (← drawn s errors path v plain deep) cell
 
-/-- Where an occurrence is first drawn, within its part. -/
-structure Stop where
-  occ : Nat
-  line : Nat
-  col : Nat
-  /-- Whether it's a place with no width: a point between things. -/
-  point : Bool := false
-  deriving DecidableEq, Inhabited
+/-- A record's name, at its own path: typed in place; without one,
+`missing` in its place. -/
+def nameShape (path : Path) (v? : Option Value) (missing : String) : Doc :=
+  let bare (e : Option Editing) (shown : String) : Doc :=
+    match e with
+    | some e => typing e .name
+    | none => t shown .name
+  match editingAt s path .edge, editingAt s path .pending with
+  | some e, _ => occ errors path .value (bare (some e) "")
+  | _, some e => occ errors path .hole (bare (some e) "")
+  | none, none =>
+    match v?.bind Value.text? with
+    | some n => if n.isEmpty then occ errors path .value (dim missing) else occ errors path .value (bare none n)
+    | none => occ errors path .hole (dim missing)
 
-/-- Each occurrence that's drawn, where it starts, in reading order: by
-line, then column; where two start together, a point before a value, and a
-container before what it holds. -/
-def stops (lines : Array Line) (occs : Array Occ) : Array Stop :=
-  let first : Array (Option (Nat × Nat × Bool)) := Id.run do
-    let mut first := Array.replicate occs.size none
-    for i in [0:lines.size] do
-      for span in lines[i]! do
-        if span.mark > 0 && span.mark ≤ occs.size then
-          if first[span.mark - 1]!.isNone then
-            first := first.set! (span.mark - 1) (some (i, span.col, span.text.isEmpty && span.face != .caret))
-    return first
-  let found := (List.range occs.size).filterMap fun i =>
-    first[i]!.map fun (line, col, point) => (⟨i, line, col, point⟩ : Stop)
-  found.toArray.qsort fun a b =>
-    a.line < b.line || (a.line == b.line && (a.col < b.col ||
-      (a.col == b.col && ((a.point && !b.point) || (a.point == b.point && a.occ > b.occ)))))
+/-- A parameter: its name, and its type if it has one, or one is being
+given. -/
+def paramShape (path : Path) (v? : Option Value) (deep : Deep) : B Doc := do
+  match v?, editingAt s path .edge with
+  | some (.cell c), none =>
+    let typePath := path ++ [.follow, .key Kinds.type_]
+    let type := (s.doc.lookup? s.library c).bind (·.field? Kinds.type_)
+    let typed ← if type.isSome || pendingAt s typePath then pure [dim ": ", ← kid errors .follow .paramType] else pure []
+    return occ errors path .value (.row (t (s.doc.shown s.library c) .name :: typed)) (some c)
+  | _, _ => value s errors path v? false deep
 
-/-- A span as it goes on the screen: with whether the selection covers it,
-whether an error is about it, and whether it's another place the selected
-cell is. -/
-structure Piece where
-  col : Nat
-  text : String
-  face : Face
-  mark : Nat
-  selected : Bool := false
-  failed : Bool := false
-  other : Bool := false
-  deriving DecidableEq, Inhabited
+/-- A lambda's parameters: each drawn as a parameter, unless the list is
+being replaced. -/
+def paramsShape (path : Path) (v? : Option Value) (deep : Deep) : B Doc := do
+  match v?, editingAt s path .edge with
+  | some (.list items), none =>
+    let parts ← elements s errors path items .param
+    return occ errors path .value (container "[" "]" parts parts)
+  | _, _ => value s errors path v? false deep
 
-/-- A line as it goes on the screen: all a row of the scene is made from,
-so a line that's the same after an edit is a row left alone. -/
-abbrev Row := Shared (Array Piece)
+/-- A notebook's entries, one under another, numbered. -/
+def entriesShape (path : Path) (v? : Option Value) (deep : Deep) : B Doc := do
+  match v? with
+  | some (.list items) =>
+    let parts ← elements s errors path items
+    let numbered := (List.range parts.length).zip parts |>.map fun (i, d) =>
+      (.row [dim (toString (i + 1) ++ (if i < 9 then "  " else " ")), d] : Doc)
+    return .col (Doc.sep (t "") numbered)
+  | _ => value s errors path v? false deep
 
-/-- A part, laid out: its lines, the occurrences their spans are marked
-with (mark `n` is occurrence `n - 1`), where each is first drawn, the
-selection it was drawn with, and its lines as they go on the screen. -/
-structure Block where
-  lines : Array Line
-  occs : Array Occ
-  stops : Array Stop
-  selection : Option Selection
-  rows : List Row
-  deriving DecidableEq, Inhabited
+/-- A section's body, one under another. -/
+def bodyShape (path : Path) (v? : Option Value) (deep : Deep) : B Doc := do
+  match v? with
+  | some (.list items) => return .col (← elements s errors path items)
+  | _ => value s errors path v? false deep
 
-/-- Whether two parts are the same: at once if they're the one object, as a
-part is that wasn't laid out again. -/
-def Block.same (a b : Block) : Bool :=
-  withPtrEq a b (fun _ => decide (a = b)) (by intro h; simp [h])
+/-- The label being typed for a new field. -/
+def labelShape (path : Path) : Doc :=
+  match editingAt s path .label with
+  | some e => .row [occ errors path .fieldEnd (typing e .label), dim ": ", dim "_"]
+  | none => .row []
 
-theorem Block.same_sound (a b : Block) (h : Block.same a b = true) : a = b :=
-  of_decide_eq_true h
+/-- The path of the root notebook's entries, and of an entry at a position. -/
+def entriesPath : Path := [.key Kinds.entries]
 
-theorem Block.same_refl (a : Block) : Block.same a a = true :=
-  decide_eq_true rfl
+def entryAt (p : Position) : Path := entriesPath ++ [.element p]
 
-/-- Whether a selection covers an occurrence: it, and what's drawn inside
-it; not the label of the field it's the value of. -/
-def covers (sel : Selection) (o : Occ) : Bool :=
-  match sel.stage with
-  | .label => o.kind == .fieldEnd && o.path == sel.path
-  | _ => sel.path.isPrefixOf o.path && !(o.kind == .label && o.path == sel.path) && o.kind != .fieldEnd
+/-- The hole of an entry being added before the entry at a path, or at the
+entries' end for their path: the selection is pending and anchored there. -/
+def adding (at_ : Path) : Option Path :=
+  match s.selection with
+  | some sel => if sel.stage == .pending && sel.anchor == some at_ then some sel.path else none
+  | none => none
+
+/-- The hole of an entry being added, as a kid: the step to it is its
+path's last. -/
+def addingKid (hole : Path) : B Doc :=
+  match hole.getLast? with
+  | some step => kid errors step
+  | none => return .row []
+
+/-- A part of the document that's an entry of the root notebook: the place
+to add an entry before it, and the entry. An entry being added before it
+is a line of its own, and takes that place. -/
+def entryShape (p : Position) : B Doc := do
+  let path := entryAt p
+  match adding s path with
+  | some hole =>
+    let h ← addingKid errors hole
+    let item ← kid errors (.element p)
+    return .col [h, t "", item, t ""]
+  | none =>
+    let point := occ errors path .entryPoint (point .ink)
+    let item ← kid errors (.element p)
+    return .col [.row [point, item], t ""]
+
+/-- The end of the root notebook's entries: the place to add one after the
+last, or the one being added there. -/
+def endShape : B Doc :=
+  match adding s entriesPath with
+  | some hole => addingKid errors hole
+  | none => return occ errors entriesPath .entryPoint (point .ink)
+
+end Display
+
+open Display in
+/-- A frame's doc and kids: what's drawn at a path for a value, as its hint
+asks. `s` is what the frame sees, and `v` its value without what's inside
+its elements and fields. -/
+def Display.shape (s : Shown) (path : Path) (hint : Hint) (errors : List Path) (deep : Deep) (v : Option Value) :
+    Doc × List Kid :=
+  let built : B Doc :=
+    match hint with
+    | .value plain => value s errors path v plain deep
+    | .name missing => pure (nameShape s errors path v missing)
+    | .param => paramShape s errors path v deep
+    | .paramType => kid errors (.key Kinds.type_)
+    | .params => paramsShape s errors path v deep
+    | .entries => entriesShape s errors path v deep
+    | .body => bodyShape s errors path v deep
+    | .label => pure (labelShape s errors path)
+    | .entry p => entryShape s errors p
+    | .end_ => endShape s errors
+  let (doc, kids) := built.run #[]
+  (doc, kids.toList)
+
+namespace Display
+
+/-- What a frame reads of its whole value: what its evaluation gave, and
+the layout its kind draws it with. -/
+def deepOf (s : Shown) (v : Option Value) : Deep :=
+  match v with
+  | some v =>
+    match v.kind? with
+    | some k =>
+      if k == Kinds.evaluation then
+        { outcome := (v.field? Kinds.expression).bind fun e => (s.results.find? (·.1 == e)).map (·.2) }
+      else if k == Kinds.notebook || k == Kinds.section_ || k == Kinds.lambda || k == Kinds.call ||
+          k == Kinds.valueWrapper then {}
+      else { node := projection s k v }
+    | none => {}
+  | none => {}
+
+/-- A kid's seed: its path a step on, and its value a step in; through a
+cell, the cell's definition. -/
+def Seed.kid (s : Shown) (seed : Seed) (k : Kid) : Seed :=
+  { path := seed.path ++ k.step.toList, hint := k.hint, errors := k.errors,
+    value := match k.step with
+      | none => seed.value
+      | some .follow =>
+        match seed.value with
+        | some (.cell c) => s.doc.lookup? s.library c
+        | _ => none
+      | some step => seed.value.bind (·.step? step) }
+
+/-- A frame's doc and kids, for a seed: drawn from the selection as it's
+seen there, and the value without what's inside it. -/
+def framed (s : Shown) (seed : Seed) : Doc × List Kid :=
+  shape { s with selection := s.selection.bind fun sel => seen sel seed.path seed.hint } seed.path seed.hint
+    seed.errors (deepOf s seed.value) (seed.value.map shallow)
+
+/-- The frames of a seed: its own, and its kids', as deep as `fuel`. -/
+def grow (s : Shown) : Nat → Seed → Deui.Fit.Frame Span
+  | 0, _ => .node (dim "…") []
+  | fuel + 1, seed =>
+    let made := framed s seed
+    .node made.1 (made.2.map fun k => grow s fuel (seed.kid s k))
+
+/-- How deep frames go before they stop: deeper than a document's values. -/
+def depth : Nat := 1000
 
 /-- Every evaluation's expression in a value, after those gathered. -/
 partial def expressionsInto (found : Array Value) : Value → Array Value
@@ -808,11 +886,6 @@ theorem item_agree (look look' : CellId → Option Value) (e : Entry)
     have hr := reach_agree look look' reachFuel (mentionsInto #[] v).toList [] [] fun x hx _ => h x hx
     simp only [itemOf, hr]
 
-/-- The path of the root notebook's entries, and of an entry at a position. -/
-def entriesPath : Path := [.key Kinds.entries]
-
-def entryAt (p : Position) : Path := entriesPath ++ [.element p]
-
 /-- All a part's layout depends on: the part with what it reaches, and what
 of the editor's state it's drawn with. -/
 structure Input where
@@ -821,74 +894,47 @@ structure Input where
   folds : List (Path × Bool)
   results : List (Value × Outcome)
   layouts : Shared (List (Value × Value × Value))
-  /-- The selected cell, if this part may show it elsewhere. -/
-  marked : Option CellId
   ribbon : Nat
   deriving DecidableEq
 
-/-- The hole of an entry being added before the entry at a path, or at the
-entries' end for their path: the selection is pending and anchored there. -/
-def adding (at_ : Path) : Option Path :=
-  match s.selection with
-  | some sel => if sel.stage == .pending && sel.anchor == some at_ then some sel.path else none
-  | none => none
+/-- What a part's frames are grown from. -/
+def partSeed : Entry → Seed
+  | .whole root => { path := [], value := root }
+  | .entry p v => { path := entriesPath, hint := .entry p, value := some (.list [(p, v)]) }
+  | .end_ => { path := entriesPath, hint := .end_, value := some (.list []) }
 
-def partDoc : Entry → M Doc
-  | .whole root => value s [] root
-  | .entry p v => do
-    let path := entryAt p
-    -- An entry being added before this one is a line of its own, and takes
-    -- the place where one would be added.
-    match adding s path with
-    | some hole =>
-      let h ← value s hole none
-      let item ← value s path (some v)
-      return .col [h, t "", item, t ""]
-    | none =>
-      let point ← occ path .entryPoint (.point .ink)
-      let item ← value s path (some v)
-      return .col [.row [point, item], t ""]
-  | .end_ =>
-    match adding s entriesPath with
-    | some hole => value s hole none
-    | none => occ entriesPath .entryPoint (.point .ink)
+/-- What a part is drawn from, as what the projection is of. -/
+def Input.shown (i : Input) : Shown :=
+  { doc := { root := none, cells := Std.TreeMap.ofList i.item.reached.val }, library := Builtin.library,
+    selection := i.selection, folds := i.folds, results := i.results, layouts := i.layouts.val }
 
-end Display
+/-- A part's frames. -/
+def frame (i : Input) : Deui.Fit.Frame Span := grow i.shown depth (partSeed i.item.entry)
 
-open Display in
-/-- A part, laid out. -/
-def Display.part (i : Input) : Block :=
-  let s : Shown :=
-    { doc := { root := none, cells := Std.TreeMap.ofList i.item.reached.val }, library := Builtin.library,
-      selection := i.selection, folds := i.folds, results := i.results, layouts := i.layouts.val }
-  let (doc, drawn) := (partDoc s i.item.entry).run {}
-  let lines := Doc.lines i.ribbon 0 0 0 doc
-  let occs := drawn.occs
-  let piece (s : Span) : Piece :=
-    match occs[s.mark - 1]? with
-    | some o =>
-      if s.mark == 0 then { col := s.col, text := s.text, face := s.face, mark := 0 }
-      else
-        let selected := match i.selection with
-          | some sel => covers sel o
-          | none => false
-        { col := s.col, text := s.text, face := s.face, mark := s.mark, selected, failed := o.failed,
-          other := !selected && !s.text.isEmpty && (o.kind == .value || o.kind == .label) && o.cell.isSome &&
-            o.cell == i.marked }
-    | none => { col := s.col, text := s.text, face := s.face, mark := 0 }
-  { lines, occs, stops := stops lines occs, selection := i.selection, rows := lines.toList.map fun l => ⟨l.map piece⟩ }
+/-- A part, laid out from nothing: its lines. -/
+def part (i : Input) : List Line :=
+  Deui.Text.lines (Deui.Fit.Frame.lay measure i.ribbon (frame i) 0 0).tokens
 
-namespace Display
+/-- Whether a selection covers an occurrence: it, and what's drawn inside
+it; not the label of the field it's the value of. -/
+def covers (sel : Selection) (o : Occ) : Bool :=
+  match sel.stage with
+  | .label => o.kind == .fieldEnd && o.path == sel.path
+  | _ => sel.path.isPrefixOf o.path && !(o.kind == .label && o.path == sel.path) && o.kind != .fieldEnd
 
-/-- What of the editor's state the parts are drawn with. -/
+/-- Whether a selection changes what's drawn: one being typed in, and one
+where there's no value yet, which has a hole or a label drawn for it. A
+selection that rests on a value is washed over what's drawn, and changes
+none of it. -/
+def drawnSelection (sel : Selection) : Bool := sel.stage != .edge || sel.editing.isSome
+
+/-- What of the editor's state the parts are drawn with: of the selection,
+only one that changes what's drawn. -/
 structure Seen where
   selection : Option Selection := none
   folds : List (Path × Bool) := []
   results : List (Value × Outcome) := []
   layouts : Shared (List (Value × Value × Value)) := ⟨[]⟩
-  /-- The cell the selection is on, and whether the document defines it. -/
-  marked : Option CellId := none
-  markedDefined : Bool := false
   ribbon : Nat := 80
   deriving DecidableEq
 
@@ -904,8 +950,7 @@ def touches (i : Item) (sel : Selection) : Bool :=
 
 /-- What of each thing the editor's state holds a part is drawn with: the
 selection if it's in the part, the folds in it, the results of its
-evaluations, what functions gave if it has kinds they draw, and the
-selected cell if it reaches it. -/
+evaluations, and what functions gave if it has kinds they draw. -/
 def selection (i : Item) (s : Option Selection) : Option Selection := s.filter i.touches
 
 def folds (i : Item) (fs : List (Path × Bool)) : List (Path × Bool) :=
@@ -920,20 +965,13 @@ def results (i : Item) (rs : List (Value × Outcome)) : List (Value × Outcome) 
 def layouts (i : Item) (ls : Shared (List (Value × Value × Value))) : Shared (List (Value × Value × Value)) :=
   if i.functions then ls else ⟨[]⟩
 
-def marked (i : Item) (m : Option CellId × Bool) : Option CellId :=
-  match i.entry with
-  | .whole _ => m.1
-  | .entry _ _ => m.1.filter fun cell => !m.2 || i.reached.val.any (·.1 == cell)
-  | .end_ => none
-
 end Item
 
 /-- A part's input: the part, with what of the editor's state it's drawn
 with. -/
 def input (c : Seen) (i : Item) : Input :=
   { item := i, selection := i.selection c.selection, folds := i.folds c.folds,
-    results := i.results c.results, layouts := i.layouts c.layouts, marked := i.marked (c.marked, c.markedDefined),
-    ribbon := c.ribbon }
+    results := i.results c.results, layouts := i.layouts c.layouts, ribbon := c.ribbon }
 
 /-- Whether one thing a part is drawn with differs, between two states:
 not if the two hold the same thing, nor if what the part takes of each is
@@ -953,30 +991,37 @@ part: whether anything the part is drawn with differs. A selection that
 moves touches the parts it leaves and enters, and no other. -/
 def touched (c c' : Seen) (i : Item) : Bool :=
   c.ribbon != c'.ribbon || differs i.selection c.selection c'.selection || differs i.folds c.folds c'.folds ||
-    differs i.results c.results c'.results || differs i.layouts c.layouts c'.layouts ||
-    differs i.marked (c.marked, c.markedDefined) (c'.marked, c'.markedDefined)
+    differs i.results c.results c'.results || differs i.layouts c.layouts c'.layouts
 
 /-- Whether a change of the editor's state leaves all the parts are drawn
 with as it was: then no part is touched, and none is asked. -/
 def still (c c' : Seen) : Bool :=
   c.ribbon == c'.ribbon && equal c.selection c'.selection && equal c.folds c'.folds &&
-    equal c.results c'.results && equal c.layouts c'.layouts &&
-    decide ((c.marked, c.markedDefined) = (c'.marked, c'.markedDefined))
+    equal c.results c'.results && equal c.layouts c'.layouts
+
+/-- A change that's still leaves the state the parts are drawn with as it
+was. -/
+theorem eq_of_still (c c' : Seen) (h : still c c' = true) : c' = c := by
+  simp only [still, Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩ := h
+  cases c; cases c'
+  simp only [Seen.mk.injEq]
+  exact ⟨(equal_sound _ _ hs).symm, (equal_sound _ _ hf).symm, (equal_sound _ _ hres).symm,
+    (equal_sound _ _ hl).symm, hr.symm⟩
 
 theorem not_touched_of_still (c c' : Seen) (h : still c c' = true) (i : Item) : touched c c' i = false := by
-  simp only [still, Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq] at h
-  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hm⟩ := h
-  simp [touched, differs, hr, hs, hf, hres, hl, hm, equal_refl]
+  rw [eq_of_still c c' h]
+  simp [touched, differs, equal_refl]
 
 /-- A part that a change doesn't touch has the input it had. -/
 theorem input_of_not_touched (c c' : Seen) (i : Item) (h : touched c c' i = false) : input c' i = input c i := by
   simp only [touched, Bool.or_eq_false_iff, bne_eq_false_iff_eq] at h
-  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hm⟩ := h
+  obtain ⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩ := h
   simp only [input, hr, same_of_not_differs _ _ _ hs, same_of_not_differs _ _ _ hf,
-    same_of_not_differs _ _ _ hres, same_of_not_differs _ _ _ hl, same_of_not_differs _ _ _ hm]
+    same_of_not_differs _ _ _ hres, same_of_not_differs _ _ _ hl]
 
 /-- A document's parts, laid out: all of it, worked out from nothing. -/
-def blocks (d : Document) (c : Seen) : List Block :=
+def lines (d : Document) (c : Seen) : List (List Line) :=
   (((entries d.root).map (item fun x => d.cells[x]?)).map (input c)).map part
 
 end Display

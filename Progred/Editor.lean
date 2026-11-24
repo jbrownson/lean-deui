@@ -2,21 +2,20 @@ import Progred.Editing
 import Progred.Entries
 import Deui.Redraw
 import Deui.Anchored
-import Deui.Flatten
+import Deui.Join
+import Deui.Under
 import Deui.Drawn
-import Deui.Sift
 
 /-!
 The editor as a deui app. Its state is the model, and its view is made of
-incremental steps, each proved: the document's parts, kept while the
-document is; each part's input, compared with what it was; each part laid
-out where its input changed; the parts' lines joined, at the scroll offset;
-the window's lines; and each line a row of the scene: the selection's wash,
-a mark on the other places the selected cell is, the text, a caret, and a
-target on each span, tagged with its occurrence, so a click finds what it's
-on. Over them, the card of offers for what's being typed. An edit lays out
-the entries it touches and changes the rows that differ; the rest is as it
-was.
+incremental steps, each proved. The model's edits are sorted by what
+they're asked of: the definitions, what of the editor's state is drawn,
+and the document's parts. Each part keeps its own: what it reaches, its
+frames, and how they're laid out; an edit it isn't sensitive to makes
+nothing of it. The parts' lines are joined, the window's are found, and
+each is a row of the scene: its text, a caret, and a target on each span,
+so a click finds what it's on. Under the rows, the selection's wash; over
+them, the card of offers for what's being typed.
 -/
 
 namespace Progred.Editor
@@ -50,61 +49,91 @@ def px (n : Nat) : Int32 := Int32.ofNat n
 /-- Where a column is, in pixels from the left. -/
 def x (col : Nat) : Int32 := px (Model.margin + col * Model.charWidth)
 
-/-- One line, as a row's parts, from the row's top left. -/
-def lineParts (line : Array Display.Piece) : List Scene :=
-  let stopOf (s : Display.Piece) : Nat := s.col + s.text.length
-  -- A wash behind the pieces that `which` picks, from the first to the last.
-  let span (which : Display.Piece → Bool) (least : Nat) (color : UInt32) : List Scene :=
-    match line.toList.filter which with
-    | [] => []
-    | first :: rest =>
-      let stop := (first :: rest).foldl (fun acc s => max acc (stopOf s)) first.col
-      [.fill (x first.col - 2) 1 (px ((max least (stop - first.col)) * Model.charWidth) + 4) (px Model.lineHeight - 2) color]
-  let washes := span (·.selected) 1 wash
-  -- What an evaluation's error is about, on red.
-  let errors := span (·.failed) 0 mistaken
-  -- The other places the selected cell is, marked.
-  let others := line.toList.filterMap fun s =>
-    if s.other then
-      some (Scene.fill (x s.col - 2) 1 (px (s.text.length * Model.charWidth) + 4) (px Model.lineHeight - 2) same)
+/-- A line's spans that `which` picks, as one wash from the first to the
+last. -/
+def span (placed : List (Nat × Span)) (which : Span → Bool) (least : Nat) (color : UInt32) : List Scene :=
+  match placed.filter fun p => which p.2 with
+  | [] => []
+  | first :: rest =>
+    let stop := (first :: rest).foldl (fun acc p => max acc (p.1 + p.2.text.length)) first.1
+    [.fill (x first.1 - 2) 1 (px ((max least (stop - first.1)) * Model.charWidth) + 4) (px Model.lineHeight - 2) color]
+
+/-- One line, as a row's parts, from the row's top left: what an
+evaluation's error is about on red, the text, a caret, and a target on
+each span that shows something, tagged with where the span is in the line. -/
+def lineParts (line : Line) : List Scene :=
+  let placed := line.placed
+  let errors := span placed (fun s => (s.occ.map (·.failed)).getD false) 0 mistaken
+  let texts := placed.filterMap fun (col, s) =>
+    if s.text.trimAscii.isEmpty then none else some (Scene.label (x col) 2 textSize (color s.face) s.text)
+  let carets := placed.filterMap fun (col, s) =>
+    if s.face == .caret then some (Scene.fill (x col - 1) 2 2 (px Model.lineHeight - 4) accent) else none
+  let targets := placed.zipIdx.filterMap fun ((col, s), i) =>
+    if s.occ.isSome && !s.text.isEmpty then
+      some (Scene.target (x col) 0 (px (s.text.length * Model.charWidth)) (px Model.lineHeight) (i + 1).toUInt32)
     else none
-  let texts := line.toList.filterMap fun s =>
-    if s.text.isEmpty then none else some (Scene.label (x s.col) 2 textSize (color s.face) s.text)
-  let carets := line.toList.filterMap fun s =>
-    if s.face == .caret then some (Scene.fill (x s.col - 1) 2 2 (px Model.lineHeight - 4) accent) else none
-  let targets := line.toList.filterMap fun s =>
-    if s.mark > 0 && !s.text.isEmpty then
-      some (Scene.target (x s.col) 0 (px (s.text.length * Model.charWidth)) (px Model.lineHeight) s.mark.toUInt32)
-    else none
-  errors ++ others ++ washes ++ texts ++ carets ++ targets
+  errors ++ texts ++ carets ++ targets
+
+/-- What's washed over the lines: where the selection is, and the cell
+it's on. -/
+structure Paint where
+  selection : Option (Path × Stage)
+  marked : Option CellId
+  deriving DecidableEq
+
+def paint (m : Model) : Paint := ⟨m.selection.map fun sel => (sel.path, sel.stage), m.selectedCell⟩
+
+/-- A line's washes: the selection's, and a mark on the other places the
+selected cell is. -/
+def washParts (p : Paint) (line : Line) : List Scene :=
+  if p.selection.isNone && p.marked.isNone then []
+  else
+    let placed := line.placed
+    let selected (s : Span) : Bool :=
+      match p.selection, s.occ with
+      | some (path, stage), some o => Display.covers { path, stage } o
+      | _, _ => false
+    let others := placed.filterMap fun (col, s) =>
+      match s.occ with
+      | some o =>
+        if !selected s && !s.text.isEmpty && (o.kind == .value || o.kind == .label) && o.cell.isSome &&
+            o.cell == p.marked then
+          some (Scene.fill (x col - 2) 1 (px (s.text.length * Model.charWidth) + 4) (px Model.lineHeight - 2) same)
+        else none
+      | none => none
+    others ++ span placed selected 1 wash
 
 /-! ## The view -/
 
-abbrev Row := Display.Row
+def rowHeight (_ : Line) : Nat := Model.lineHeight
 
-def rowsOf (b : Display.Block) : List Row := b.rows
+def rowScene (line : Line) : Scene := .group 0 0 (lineParts line)
 
-def rowHeight (_ : Row) : Nat := Model.lineHeight
-
-def rowScene (r : Row) : Scene := .group 0 0 (lineParts r.val)
+def washScene (p : Paint) (line : Line) : Scene := .group 0 0 (washParts p line)
 
 /-- The editor's state is the model, edited by what changed: something the
 view reads, or the rest. -/
 abbrev edits : EditStructure := ⟨Model, Model.Edit, Model.Edit.apply⟩
-
-/-- The model, and the document laid out: its parts, edited as a list. -/
-abbrev Laid : EditStructure := prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Block))))
 
 /-- A table of definitions. -/
 abbrev Cells := Std.TreeMap CellId Value
 
 abbrev cellsEdits : EditStructure := ⟨Cells, Model.CellsEdit, Model.CellsEdit.apply⟩
 
-/-- The model with its definitions, edited by which were written, and the
-document's parts, edited by which were: what the model's edits say, sorted
-by what they're asked of. -/
-abbrev Source : EditStructure :=
-  prod (prod (latest Model) (runs cellsEdits)) (runs (Lists.editStructure Entries.Parts))
+/-- What every part is drawn under: what of the editor's state is drawn,
+and the definitions, edited by which were written. -/
+abbrev Under : EditStructure := prod (latest Display.Seen) (runs cellsEdits)
+
+/-- A line's edits: it's replaced. -/
+abbrev LineEdits : EditStructure := whole (plain Line)
+
+/-- A part's lines, edited as a list. -/
+abbrev PartLines : EditStructure := runs (Lists.editStructure LineEdits)
+
+/-- The model; what the parts are drawn under; and the document's parts,
+edited by which were: what the model's edits say, sorted by what they're
+asked of. -/
+abbrev Source : EditStructure := prod (latest Model) (prod Under (runs (Lists.editStructure Entries.Parts)))
 
 /-- The parts' edits for a run of the model's, each from the model before it. -/
 def source.parts (m : Model) : List Model.Edit → List (Lists.Edit.of Entries.Parts)
@@ -112,8 +141,8 @@ def source.parts (m : Model) : List Model.Edit → List (Lists.Edit.of Entries.P
   | e :: t => Entries.edits m e ++ source.parts (e.apply m) t
 
 def source : Inc (runs edits) Source :=
-  ⟨fun m => ((m, m.doc.cells), Display.entries m.doc.root),
-   fun m es => ((run edits es m, es.flatMap Model.Edit.cells?), source.parts m es)⟩
+  ⟨fun m => (m, (m.seen, m.doc.cells), Display.entries m.doc.root),
+   fun m es => (run edits es m, ((run edits es m).seen, es.flatMap Model.Edit.cells?), source.parts m es)⟩
 
 theorem source_ok : source.ok := by
   intro m es
@@ -144,11 +173,11 @@ theorem source_ok : source.ok := by
           Display.entries (e.apply m).doc.root := Entries.edits_ok m e
       exact (run_append (Lists.editStructure Entries.Parts) _ _ _).trans
         ((congrArg (run (Lists.editStructure Entries.Parts) _) step).trans (ih _))
-  show (((run edits es m, run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells) : Model × Cells),
-      Lists.patch Entries.Parts (source.parts m es) (Display.entries m.doc.root)) =
-    ((run edits es m, (run edits es m).doc.cells), Display.entries (run edits es m).doc.root)
+  show ((run edits es m, ((run edits es m).seen, run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells),
+      Lists.patch Entries.Parts (source.parts m es) (Display.entries m.doc.root)) :
+        Model × (Display.Seen × Cells) × List Display.Entry) =
+    (run edits es m, ((run edits es m).seen, (run edits es m).doc.cells), Display.entries (run edits es m).doc.root)
   rw [cells, parts]
-  rfl
 
 /-- A table of definitions, as what gives a cell's. -/
 def look (cells : Cells) (c : CellId) : Option Value := cells[c]?
@@ -181,110 +210,176 @@ theorem item_untouched (e : Display.Entry) (ces : List Model.CellsEdit) (cells :
       show Display.item (look (run cellsEdits t (Model.defined cells c v))) e = _
       rw [rest, step]
 
-/-- The model, its definitions, and the parts with what they reach. -/
-abbrev Items : EditStructure :=
-  prod (latest (Model × Cells)) (runs (Lists.editStructure (whole (plain Display.Item))))
+/-! ### A part -/
 
-/-- Each part with what it reaches. An edit to the definitions is asked of
-each part, and only one that asked for a cell it writes is worked out
-again: writing a definition leaves alone every part that doesn't reach it. -/
-def items : Cached Source Items :=
-  Cached.carrying (fun (a : Model × Cells) => a)
-    (Lists.siftedWhole (cc := prod (latest Model) (runs cellsEdits))
-      (fun (a : Model × Cells) entry => Display.item (look a.2) entry)
-      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) _ item => d.2.any (writes item))
-      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) => d.2.isEmpty))
+/-- A part's frames within their ribbon, edited frame by frame. -/
+abbrev Framed : EditStructure := prod (latest Nat) (runs (Fit.edits Span))
 
-theorem items_ok : items.ok :=
-  Cached.carrying_ok _ _
-    (Lists.siftedWhole_ok _ _ _
-      (fun (c : Model × Cells) (d : Model × List Model.CellsEdit) entry h => item_untouched entry d.2 c.2 h)
-      (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) h _ => by
-        have : d.2 = [] := List.isEmpty_iff.mp h
-        simp [this]))
+/-- What a part's frames keep: what they were drawn under, the part, what
+it reaches, and all it's drawn from. -/
+structure Drawn where
+  seen : Display.Seen
+  cells : Cells
+  entry : Display.Entry
+  item : Display.Item
+  input : Display.Input
 
-/-- Each part's input. A change of what the model shows is asked of each
-part, and only a part it touches is given a new input: a selection that
-moves makes edits at the parts it leaves and enters. -/
-def inputs : Cached Items (prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Input))))) :=
-  compose (Cached.mapFirst fun (a : Model × Cells) => (a.1, a.1.seen))
-    (Cached.carrying (fun (a : Model × Display.Seen) => a.1)
-      (Lists.siftedWhole (cc := latest (Model × Display.Seen))
-        (fun (a : Model × Display.Seen) item => Display.input a.2 item)
-        (fun (a b : Model × Display.Seen) item _ => Display.touched a.2 b.2 item)
-        (fun (a b : Model × Display.Seen) => Display.still a.2 b.2)))
+def drawn.f (seen : Display.Seen) (cells : Cells) (entry : Display.Entry) : (Nat × Fit.Frame Span) × Drawn :=
+  let item := Display.item (look cells) entry
+  let input := Display.input seen item
+  ((input.ribbon, Display.frame input), ⟨seen, cells, entry, item, input⟩)
 
-theorem inputs_ok : inputs.ok :=
-  compose_ok _ _ (Cached.mapFirst_ok _)
-    (Cached.carrying_ok _ _
-      (Lists.siftedWhole_ok _ _ _
-        (fun (c d : Model × Display.Seen) item h => Display.input_of_not_touched c.2 d.2 item h)
-        (fun (c d : Model × Display.Seen) h item => Display.not_touched_of_still c.2 d.2 h item)))
+/-- A part's frames after an edit. One that writes no definition the part
+asked for, leaves the part as it is, and changes nothing the part is drawn
+with, makes no edit; any other has the part's frames grown again. -/
+def drawn.df (k : Drawn) (seen : Display.Seen) (ces : List Model.CellsEdit)
+    (ees : List (Whole (plain Display.Entry))) : (Nat × List (Fit.Edit Span)) × Drawn :=
+  if ees.isEmpty && !ces.any (writes k.item) && !Display.touched k.seen seen k.item then
+    ((k.input.ribbon, []), { k with seen, cells := run cellsEdits ces k.cells })
+  else
+    let made := drawn.f seen (run cellsEdits ces k.cells) (run (whole (plain Display.Entry)) ees k.entry)
+    ((made.1.1, [.replace made.1.2]), made.2)
 
-/-- A part's layout, of its input. -/
-def partInc : Inc (plain Display.Input) (plain Display.Block) := ⟨Display.part, fun _ e => nomatch e⟩
+/-- A part's frames, as an incremental function of what it's drawn under
+and the part. -/
+def drawn : Cached (prod Under Entries.Parts) Framed where
+  Cache := Drawn
+  f a := drawn.f a.1.1 a.1.2 a.2
+  df k d := drawn.df k d.1.1 d.1.2 d.2
 
-theorem partInc_ok : partInc.ok := fun _ e => nomatch e
+theorem drawn_ok : drawn.ok := by
+  intro a d
+  obtain ⟨⟨seen, cells⟩, entry⟩ := a
+  obtain ⟨⟨seen', ces⟩, ees⟩ := d
+  show (Framed.apply (drawn.df (drawn.f seen cells entry).2 seen' ces ees).1 (drawn.f seen cells entry).1,
+      (drawn.df (drawn.f seen cells entry).2 seen' ces ees).2) =
+    drawn.f seen' (run cellsEdits ces cells) (run (whole (plain Display.Entry)) ees entry)
+  by_cases h : (ees.isEmpty && !ces.any (writes (Display.item (look cells) entry)) &&
+      !Display.touched seen seen' (Display.item (look cells) entry)) = true
+  · simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_iff] at h
+    obtain ⟨⟨he, hc⟩, ht⟩ := h
+    subst he
+    have hi := item_untouched entry ces cells hc
+    have hin := Display.input_of_not_touched seen seen' _ ht
+    simp only [drawn.df, drawn.f, List.isEmpty_nil, hc, ht, Bool.not_false, Bool.and_self, ite_true]
+    show (((Display.input seen (Display.item (look cells) entry)).ribbon,
+        Display.frame (Display.input seen (Display.item (look cells) entry))), _) = _
+    simp only [run, hi, hin]
+  · have hf : (ees.isEmpty && !ces.any (writes (Display.item (look cells) entry)) &&
+        !Display.touched seen seen' (Display.item (look cells) entry)) = false := by simpa using h
+    simp only [drawn.df, drawn.f] at hf ⊢
+    simp only [hf]
+    rfl
 
-/-- The document laid out, as an incremental function of the model: a part
-is laid out again only where its input changed. -/
+/-- A part: its frames, laid out within the ribbon, as lines. -/
+def part : Cached (prod Under Entries.Parts) PartLines :=
+  compose drawn (compose (Fit.fit measure) (cached (lift Text.rows)))
+
+theorem part_ok : part.ok :=
+  compose_ok _ _ drawn_ok (compose_ok _ _ (Fit.fit_ok measure) (cached_ok _ (lift_ok _ Text.rows_ok)))
+
+/-- What a part gives from nothing is its lines. -/
+theorem part_lines (seen : Display.Seen) (cells : Cells) (entry : Display.Entry) :
+    (part.f ((seen, cells), entry)).1 = Display.part (Display.input seen (Display.item (look cells) entry)) := by
+  simp only [part, compose, drawn, drawn.f, Fit.fit, cached, lift, Text.rows, Display.part, id]
+  with_reducible_and_instances rfl
+
+/-! ### The parts -/
+
+/-- The model, and the document laid out: each part's lines. -/
+abbrev Laid : EditStructure := prod (latest Model) (runs (Lists.editStructure PartLines))
+
+/-- An edit of what the parts are drawn under that changes nothing. -/
+def idle (u : Display.Seen × Cells) : Display.Seen × List Model.CellsEdit := (u.1, [])
+
+/-- Whether an edit of what the parts are drawn under changes nothing of
+it: then no part is asked. -/
+def quiet (u : Display.Seen × Cells) (d : Display.Seen × List Model.CellsEdit) : Bool :=
+  Display.still u.1 d.1 && d.2.isEmpty
+
+/-- The document laid out, as an incremental function of the model: each
+part is given the edits, and makes of them what it's sensitive to. -/
 def layout : Cached (runs edits) Laid :=
-  compose (compose (compose (cached source) items) inputs)
-    (Cached.second (cached (Lists.map.inc (whole.lift partInc))))
+  compose (cached source) (Cached.second (Lists.mapUnder part idle quiet))
 
 theorem layout_ok : layout.ok :=
-  compose_ok _ _ (compose_ok _ _ (compose_ok _ _ (cached_ok _ source_ok) items_ok) inputs_ok)
-    (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ (whole_lift_ok _ partInc_ok))))
+  compose_ok _ _ (cached_ok _ source_ok)
+    (Cached.second_ok _ (Lists.mapUnder_ok part idle quiet part_ok (fun _ => rfl)
+      (fun u d h x => by
+        obtain ⟨seen, cells⟩ := u
+        obtain ⟨seen', ces⟩ := d
+        simp only [quiet, Bool.and_eq_true, List.isEmpty_iff] at h
+        obtain ⟨hs, hc⟩ := h
+        have e := Display.eq_of_still seen seen' hs
+        subst hc
+        show part.f ((seen', cells), x) = part.f ((seen, cells), x)
+        rw [e])))
 
 /-- How far the lines' top is above the window's top. -/
 def offset (m : Model) : Int := (m.scroll : Int) - Model.margin
 
 /-- The model, and the lines of the document's parts, joined. -/
-abbrev Lines : EditStructure := prod (latest Model) (runs (Lists.editStructure (plain Row)))
+abbrev Lines : EditStructure := prod (latest Model) (runs (Lists.editStructure LineEdits))
 
-/-- The parts' lines, joined: a part laid out again has its lines taken out
-and its new ones put in. Without a derivative of a part's layout, its lines
-are all new. -/
-def lines : Cached Laid Lines :=
-  Cached.second (cached (Lists.flatBy.inc (cb := whole (plain Display.Block)) rowsOf))
+/-- The parts' lines, joined: a line of a part edited is that line of the
+whole edited. -/
+def lines : Cached Laid Lines := Cached.second (cached (Lists.join LineEdits))
 
-theorem lines_ok : lines.ok :=
-  Cached.second_ok _ (cached_ok _ (Lists.flatBy_inc_ok _))
+theorem lines_ok : lines.ok := Cached.second_ok _ (cached_ok _ (Lists.join_ok LineEdits))
 
 /-- The lines, at the scroll offset. -/
-def placedRows : Inc Lines (runs (Lists.Scrolled.At.edits (plain Row))) :=
-  Lists.Scrolled.At.inc (plain Row) (Inc.onSecond Inc.identity) (fun (a : Model × List Row) => offset a.1)
+def placedRows : Inc Lines (runs (Lists.Scrolled.At.edits LineEdits)) :=
+  Lists.Scrolled.At.inc LineEdits (Inc.onSecond Inc.identity) (fun (a : Model × List Line) => offset a.1)
 
-/-- The lines a window of a height shows, on the screen. -/
-def window (height : Nat) : Cached Lines (runs sceneEdits) :=
-  compose (cached placedRows)
-    (compose (Lists.Scrolled.anchored (plain Row) rowHeight)
-      (compose (cached (Lists.Scrolled.view.inc (plain Row) rowHeight height)) (cached (Drawing.inc rowScene))))
+/-- The model, and the lines a window shows, placed. -/
+abbrev Visible : EditStructure := prod (latest Model) (runs (Drawing.editStructure Line))
 
-theorem window_ok (height : Nat) : (window height).ok :=
-  compose_ok _ _ (cached_ok _ (Lists.Scrolled.At.inc_ok _ _ _ (Inc.onSecond_ok _ Inc.identity_ok)))
-    (compose_ok _ _ (Lists.Scrolled.anchored_ok _ _)
-      (compose_ok _ _ (cached_ok _ (Lists.Scrolled.view_inc_ok _ _ _)) (cached_ok _ (Drawing.inc_ok rowScene))))
+/-- The lines a window of a height shows. -/
+def visible (height : Nat) : Cached Lines Visible :=
+  Cached.carrying (fun (m : Model) => m)
+    (compose (cached placedRows)
+      (compose (Lists.Scrolled.anchored LineEdits rowHeight)
+        (cached (Lists.Scrolled.view.inc LineEdits rowHeight height))))
+
+theorem visible_ok (height : Nat) : (visible height).ok :=
+  Cached.carrying_ok _ _
+    (compose_ok _ _ (cached_ok _ (Lists.Scrolled.At.inc_ok _ _ _ (Inc.onSecond_ok _ Inc.identity_ok)))
+      (compose_ok _ _ (Lists.Scrolled.anchored_ok _ _) (cached_ok _ (Lists.Scrolled.view_inc_ok _ _ _))))
+
+/-- The lines' text, each a row of the scene. -/
+def textLayer : Cached Visible (runs sceneEdits) := cached (Inc.onSecond (Drawing.inc rowScene))
+
+/-- The lines' washes, under their text: drawn again when the selection
+moves, and else following the lines as the text does. -/
+def washLayer : Cached Visible (runs sceneEdits) :=
+  keyed (fun (a : Model × List (Placed Line)) => paint a.1)
+    (fun p => cached (Inc.onSecond (Drawing.inc (washScene p))))
 
 /-- How many parts an edit lays out again before the window's lines are
 worked out afresh, not edit by edit: an edit that large costs more that way. -/
-def manyParts : Nat := 1
+def manyParts : Nat := 8
 
 /-- The window's lines, whatever its height: a new height shows them anew,
-and so does an edit that lays out many parts at once. -/
+and so does an edit of many parts at once. -/
 def rowsLayer : Cached Laid (runs sceneEdits) :=
-  keyed (fun (a : Model × List Display.Block) => a.1.height) (fun height => compose lines (window height))
-    (fun _ (d : Model × List (Lists.Edit.of (whole (plain Display.Block)))) => decide (d.2.length > manyParts))
+  keyed (fun (a : Model × List (List Line)) => a.1.height)
+    (fun height => compose lines (compose (visible height) (layers washLayer textLayer)))
+    (fun _ (d : Model × List (Lists.Edit.of PartLines)) => decide (d.2.length > manyParts))
 
 theorem rowsLayer_ok : rowsLayer.ok :=
-  keyed_ok _ _ _ fun height => compose_ok _ _ lines_ok (window_ok height)
+  keyed_ok _ _ _ fun height =>
+    compose_ok _ _ lines_ok
+      (compose_ok _ _ (visible_ok height)
+        (layers_ok _ _ (keyed_ok _ _ _ fun p => cached_ok _ (Inc.onSecond_ok _ (Drawing.inc_ok (washScene p))))
+          (cached_ok _ (Inc.onSecond_ok _ (Drawing.inc_ok rowScene)))))
 
 /-- Where the caret is: its line and column. -/
-def caretAt (l : Model.Layout) : Option (Nat × Nat) :=
-  l.blocks.zipIdx.findSome? fun (block, b) =>
-    if block.selection.isNone then none
-    else (List.range block.lines.size).findSome? fun i =>
-      (block.lines[i]!.toList.find? (·.face == .caret)).map fun s => (l.lineOf b + i, s.col)
+def caretAt (m : Model) (l : Model.Layout) : Option (Nat × Nat) :=
+  m.selection.bind fun sel =>
+    (m.partOf sel).bind fun b =>
+      (l.parts[b]?).bind fun lines =>
+        lines.zipIdx.findSome? fun (line, i) =>
+          (line.placed.find? (·.2.face == .caret)).map fun p => (l.lineOf b + i, p.1)
 
 /-- The card of offers, under the caret: up to 8, the chosen one marked. -/
 def offersCard (m : Model) (l : Model.Layout) : List Scene :=
@@ -292,7 +387,7 @@ def offersCard (m : Model) (l : Model.Layout) : List Scene :=
   | some e =>
     let offers := if e.picker then Model.offers m else []
     if offers.isEmpty then []
-    else match caretAt l with
+    else match caretAt m l with
       | some (line, col) =>
         let from_ := if e.choice ≥ 8 then e.choice - 7 else 0
         let shown := (offers.drop from_).take 8
@@ -313,7 +408,7 @@ def offersCard (m : Model) (l : Model.Layout) : List Scene :=
 
 /-- The card of offers, drawn again whenever anything changes: it's small. -/
 def cardLayer : Cached Laid (runs sceneEdits) :=
-  Redraw.redraw (ca := Laid) fun (a : Model × List Display.Block) => offersCard a.1 ⟨a.2⟩
+  Redraw.redraw (ca := Laid) fun (a : Model × List (List Line)) => offersCard a.1 ⟨a.2⟩
 
 /-- The view: the document laid out, its window's lines, and the card over
 them. -/
@@ -328,43 +423,48 @@ theorem view_ok : view.ok :=
 /-! ## What the view keeps -/
 
 /-- The model and its layout, as the view keeps them. -/
-def laidOf (c : view.Cache) : Model × List Display.Block :=
-  let kept : layout.Cache × (rowsLayer.Cache × ((Model × List Display.Block) × Nat)) := c
+def laidOf (c : view.Cache) : Model × List (List Line) :=
+  let kept : layout.Cache × (rowsLayer.Cache × ((Model × List (List Line)) × Nat)) := c
   kept.2.2.1
 
 /-- The layout of the model an edit is passing through, from what the view
 keeps for the one it began from: the edits the model has come to so far
-are run through the layout's derivative, and only the parts they touch are
-laid out. -/
+are run through the layout's derivative, and only what they touch is laid
+out. -/
 def relaid (c : view.Cache) (m : Model) : Model.Layout :=
-  let kept : layout.Cache × (rowsLayer.Cache × ((Model × List Display.Block) × Nat)) := c
-  let made : (Model × List (Lists.Edit.of (whole (plain Display.Block)))) × layout.Cache :=
-    layout.df kept.1 m.emitted
-  ⟨Lists.patch (whole (plain Display.Block)) made.1.2 kept.2.2.1.2⟩
+  let kept : layout.Cache × (rowsLayer.Cache × ((Model × List (List Line)) × Nat)) := c
+  let made : (Model × List (Lists.Edit.of PartLines)) × layout.Cache := layout.df kept.1 m.emitted
+  ⟨Lists.patch PartLines made.1.2 kept.2.2.1.2⟩
 
 /-- What the view keeps for a model is the model and its layout. -/
-theorem laidOf_view (m : Model) : laidOf (view.f m).2 = (m, Display.blocks m.doc m.seen) := rfl
+theorem laidOf_view (m : Model) : laidOf (view.f m).2 = (m, Display.lines m.doc m.seen) := by
+  show (m, (Display.entries m.doc.root).map fun x => (part.f ((m.seen, m.doc.cells), x)).1) = _
+  simp only [Display.lines, List.map_map]
+  exact congrArg (Prod.mk m) (List.map_congr_left fun x _ => part_lines m.seen m.doc.cells x)
 
 /-- And the layout it gives of a model passing through is the layout of the
 model those edits make, as if worked out from nothing. -/
 theorem relaid_view (m m' : Model) : relaid (view.f m).2 m' = Model.Layout.of (run edits m'.emitted m) := by
   have h := congrArg (fun r => r.1.2) (layout_ok m m'.emitted)
-  exact congrArg (fun bs : List Display.Block => (⟨bs⟩ : Model.Layout)) h
+  have e := laidOf_view (run edits m'.emitted m)
+  have e2 : (layout.f (run edits m'.emitted m)).1.2 = Display.lines (run edits m'.emitted m).doc
+      (run edits m'.emitted m).seen := congrArg Prod.snd e
+  exact congrArg (fun ps : List (List Line) => (⟨ps⟩ : Model.Layout)) (h.trans e2)
 
 /-! ## Events -/
 
 /-- What a click does: on an offer, takes it; on a span, selects the
-occurrence it's marked with, found in the part of the line it's on. -/
+occurrence it shows, found by the line it's on and where it is in it. -/
 def clicked (l : Model.Layout) (m : Model) (h : Hit) : Model :=
   if h.tag ≥ Model.offerTag then Model.clickedOffer m (h.tag - Model.offerTag).toNat
   else
     match h.path with
-    | 0 :: 0 :: row :: _ =>
+    | 0 :: 0 :: 1 :: row :: _ =>
       -- The window's first row is the line the scroll offset falls in.
       let first := (offset m).toNat / Model.lineHeight
       match l.lineAt (first + row) with
-      | some (block, _) =>
-        match block.occs[h.tag.toNat - 1]? with
+      | some (lines, i) =>
+        match ((lines[i]?).bind fun line => line.cells[h.tag.toNat - 1]?).bind (·.occ) with
         | some o => if h.tag == 0 then m else m.select o
         | none => m
       | none => m
