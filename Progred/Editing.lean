@@ -25,13 +25,18 @@ structure Offer where
 
 def picker (text : String := "") : Editing := { text, caret := text.length, picker := true }
 
+/-- The model with a selection, and with folds: changes the view reads. -/
+def selecting (m : Model) (s : Option Selection) : Model := m.change (.select s)
+
+def folding (m : Model) (fs : List (Path × Bool)) : Model := m.change (.folds fs)
+
 /-- The model resting on the value at a path. -/
 def rest (m : Model) (path : Path) : Model :=
-  { m with selection := some { path }, typingRun := false }
+  { m.selecting (some { path }) with typingRun := false }
 
 /-- The model with a hole open at a path, to be typed into. -/
 def openAt (m : Model) (path : Path) (stage : Stage := .pending) (text : String := "") : Model :=
-  { m with selection := some { path, stage, editing := some (picker text) }, typingRun := false }
+  { m.selecting (some { path, stage, editing := some (picker text), anchor := m.anchorFor path }) with typingRun := false }
 
 /-- The fields a kind's records show. -/
 def fieldsOf (m : Model) (k : CellId) : List CellId :=
@@ -60,7 +65,7 @@ first empty place, if it has one, else resting on it. -/
 partial def settle (m : Model) (path : Path) : Model :=
   match m.at? path with
   | some (.cell c) =>
-    if (m.doc.definition? c).isSome then settle { m with folds := (path, false) :: m.folds } (path ++ [.follow])
+    if (m.doc.definition? c).isSome then settle (m.folding ((path, false) :: m.folds)) (path ++ [.follow])
     else m.rest path
   | some (.list []) => m.openAt (path ++ [.element (Position.between none none)])
   | some v@(.record fields) =>
@@ -213,8 +218,7 @@ def labelOffers (m : Model) (path : Path) (query : String) : List Offer :=
       if query.isEmpty then []
       else [⟨query, "label", true, fun m =>
         let (id, m) := m.fresh
-        let m := { m with doc := { m.doc with cells := m.doc.cells.insert id (Builtin.named query) },
-                          written := id :: m.written }
+        let m := m.change (.cell id (some (Builtin.named query)))
         m.openAt (path ++ [.key id])⟩]
     declared ++ labels ++ common ++ new
   | _ => []
@@ -222,11 +226,14 @@ def labelOffers (m : Model) (path : Path) (query : String) : List Offer :=
 /-- The offers for what's being typed, if it's a query. -/
 def offers (m : Model) : List Offer :=
   match m.selection with
-  | some { path, stage, editing := some e } =>
-    if !e.picker then []
-    else if stage == .label then labelOffers m path e.text
-    else valueOffers m path e.text
-  | _ => []
+  | some sel =>
+    match sel.editing with
+    | some e =>
+      if !e.picker then []
+      else if sel.stage == .label then labelOffers m sel.path e.text
+      else valueOffers m sel.path e.text
+    | none => []
+  | none => []
 
 /-- The chosen offer taken. -/
 def commit (m : Model) : Model :=
@@ -270,7 +277,7 @@ def writeLine (m : Model) (path : Path) (text : String) : Model :=
 
 /-- The model with what's being typed changed: a line is written through. -/
 def retype (m : Model) (sel : Selection) (e : Editing) : Model :=
-  let m := { m with selection := some { sel with editing := some e } }
+  let m := (m.selecting (some { sel with editing := some e }))
   if e.picker then m else writeLine m sel.path e.text
 
 /-! ## Keys -/
@@ -278,7 +285,7 @@ def retype (m : Model) (sel : Selection) (e : Editing) : Model :=
 def toggleFold (m : Model) (path : Path) (c : CellId) : Model :=
   let plain := ((m.at? path.dropLast).bind (·.kind?)).isNone
   let closed := Display.isOpen m.shown path c plain
-  { m with folds := (path, closed) :: m.folds.filter (·.1 != path) }
+  (m.folding ((path, closed) :: m.folds.filter (·.1 != path)))
 
 /-- A character typed. -/
 def typed (m : Model) (c : Char) : Model :=
@@ -320,14 +327,13 @@ def typed (m : Model) (c : Char) : Model :=
             | some text =>
               let text := text ++ c.toString
               retype m sel { text, caret := text.length, picker := false }
-            | none => { m with selection := some { sel with editing := some (picker c.toString) } }
+            | none => (m.selecting (some { sel with editing := some (picker c.toString) }))
       | none =>
         if !m.doc.writable m.library sel.path then m
         else if sel.path.getLast? == some (.key Kinds.name) then
           -- A name is text: the first letter writes it, and the rest type in it.
           let m := m.put sel.path (Value.text c.toString)
-          { m with selection := some { path := sel.path, editing := some { text := c.toString, caret := 1, picker := false } },
-                   typingRun := true }
+          { m.selecting (some { path := sel.path, editing := some { text := c.toString, caret := 1, picker := false } }) with typingRun := true }
         else m.openAt sel.path sel.stage c.toString
 
 /-- The place of a path in what holds it: the holder's path and the step. -/
@@ -350,7 +356,7 @@ partial def within (m : Model) (path : Path) (first : Bool) : Model :=
       else Position.between (items.getLast?.map (·.1)) none
     m.openAt (path ++ [.element p])
   | some (.cell c) =>
-    if (m.doc.lookup? m.library c).isSome then within { m with folds := (path, false) :: m.folds } (path ++ [.follow]) first
+    if (m.doc.lookup? m.library c).isSome then within (m.folding ((path, false) :: m.folds)) (path ++ [.follow]) first
     else m.openAt (path ++ [.follow])
   | _ => m
 
@@ -395,7 +401,8 @@ def delete (laid : Model → Layout) (m : Model) (sel : Selection) : Model :=
     match m.doc.delete sel.path with
     | some doc =>
       let m := m.write doc (at_ := some sel.path)
-      if holeDrawn m sel.path then { m with selection := some { path := sel.path, stage := .pending } }
+      if holeDrawn m sel.path then
+        (m.selecting (some { path := sel.path, stage := .pending, anchor := m.anchorFor sel.path }))
       else restDrawn laid m sel.path.dropLast
     | none => m
   else
@@ -411,7 +418,7 @@ def delete (laid : Model → Layout) (m : Model) (sel : Selection) : Model :=
           | some q => m.rest (holder ++ [.element q])
           | none => restDrawn laid m holder
         | _ => restDrawn laid m holder
-    | none => { m with selection := none }
+    | none => (m.selecting (none))
 
 /-! ## The clipboard -/
 
@@ -470,7 +477,7 @@ def pasted (m : Model) (text : String) (clip : Option Document) : Model :=
 the value it was over, or the hole. -/
 def stopTyping (m : Model) (sel : Selection) : Model :=
   if sel.stage == .label then m.rest sel.path
-  else { m with selection := some { sel with editing := none }, typingRun := false }
+  else { m.selecting (some { sel with editing := none }) with typingRun := false }
 
 def keyReturn : UInt32 := 13
 def keyTab : UInt32 := 9
@@ -507,18 +514,18 @@ def key (laid : Model → Layout) (m : Model) (code mods : UInt32) : Model :=
     match sel.editing with
     | some e =>
       if code == keyLeft then
-        if e.caret > 0 then { m with selection := some { sel with editing := some { e with caret := e.caret - 1 } } }
+        if e.caret > 0 then (m.selecting (some { sel with editing := some { e with caret := e.caret - 1 } }))
         else (stopTyping m sel).step laid false
       else if code == keyRight then
-        if e.caret < e.text.length then { m with selection := some { sel with editing := some { e with caret := e.caret + 1 } } }
+        if e.caret < e.text.length then (m.selecting (some { sel with editing := some { e with caret := e.caret + 1 } }))
         else (stopTyping m sel).step laid true
       else if code == keyUp then
         if e.picker && !(offers m).isEmpty then
-          { m with selection := some { sel with editing := some { e with choice := e.choice - 1 } } }
+          (m.selecting (some { sel with editing := some { e with choice := e.choice - 1 } }))
         else (stopTyping m sel).stepLine laid false
       else if code == keyDown then
         if e.picker && !(offers m).isEmpty then
-          { m with selection := some { sel with editing := some { e with choice := min (e.choice + 1) ((offers m).length - 1) } } }
+          (m.selecting (some { sel with editing := some { e with choice := min (e.choice + 1) ((offers m).length - 1) } }))
         else (stopTyping m sel).stepLine laid true
       else if code == keyBackspace then
         if e.caret > 0 then
@@ -542,7 +549,7 @@ def key (laid : Model → Layout) (m : Model) (code mods : UInt32) : Model :=
         if sel.stage == .edge && (m.at? sel.path).isSome then stopTyping m sel
         else match parent? sel.path with
           | some (holder, _) => m.rest (if sel.stage == .label then sel.path else holder)
-          | none => { m with selection := none }
+          | none => (m.selecting (none))
       else m
     | none =>
       if code == keyLeft then m.step laid false
@@ -550,7 +557,7 @@ def key (laid : Model → Layout) (m : Model) (code mods : UInt32) : Model :=
       else if code == keyUp then m.stepLine laid false
       else if code == keyDown then m.stepLine laid true
       else if code == keyTab then m.step laid (!shift) isTabStop
-      else if code == keyEscape then { m with selection := none }
+      else if code == keyEscape then (m.selecting (none))
       else if code == keyBackspace || code == keyDelete then
         if m.doc.writable m.library sel.path then delete laid m sel else m
       else if code == keyReturn then
@@ -568,7 +575,7 @@ def clickedOffer (m : Model) (index : Nat) : Model :=
   match m.selection with
   | some sel =>
     match sel.editing with
-    | some e => commit { m with selection := some { sel with editing := some { e with choice := index } } }
+    | some e => commit (m.selecting (some { sel with editing := some { e with choice := index } }))
     | none => m
   | none => m
 

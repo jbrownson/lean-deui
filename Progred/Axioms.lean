@@ -21,5 +21,11 @@ or a new axiom. -/
 /-- info: 'Progred.Model.defined_other' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Model.defined_other
 
-/-- info: 'Progred.Display.inputOf_of_not_touched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in #print axioms Progred.Display.inputOf_of_not_touched
+/-- info: 'Progred.Display.input_of_not_touched' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Display.input_of_not_touched
+
+/-- info: 'Progred.Entries.edits_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Entries.edits_ok
+
+/-- info: 'Progred.Editor.source_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Editor.source_ok

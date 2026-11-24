@@ -20,8 +20,8 @@ def show_ (m : M) : IO Unit := do
   -- and this looks.
   if l.plain != (Model.Layout.of model).plain then IO.println "  !! the layout kept isn't the model's layout"
   if !(m.shown.1 == (Editor.view.f model).1) then IO.println "  !! the scene kept isn't the model's view"
-  -- The edits said every cell that was written: none is still marked.
-  if model.rewritten || !model.written.isEmpty then IO.println "  !! cells written that no edit said"
+  -- The edits said every change that was noted: none is left.
+  if !model.log.isEmpty then IO.println "  !! changes noted that no edit said"
   match model.selection with
   | some sel =>
     let at_ := (l.here model).map fun (b, i) =>

@@ -1,11 +1,11 @@
-import Deui.Diff
+import Deui.Lists
 import Deui.Scene
 
 /-!
 Ways of putting incremental functions together, besides one after another:
-values in pairs, a value carried along beside a list that's edited, a list
-tracked by comparing it with what it was, scenes in layers, and a view
-rebuilt when its key changes. Each is correct if its parts are.
+values in pairs, a value carried along beside what's worked out from it,
+scenes in layers, and a view drawn afresh when its key changes. Each is
+correct if its parts are.
 -/
 
 namespace Deui
@@ -49,46 +49,11 @@ theorem carrying_ok {D : Type} (h : ca.Value → D) (g : Cached (prod ca cb) cc)
     ((h (ca.apply d.1 a.1), (g.f ((prod ca cb).apply d a)).1), (ca.apply d.1 a.1, (g.f ((prod ca cb).apply d a)).2))
   rw [← e]
 
-/-- `g`, with what it's of kept beside its result, edited as it's edited. -/
-def beside (g : Cached ca cb) : Cached ca (prod ca cb) where
-  Cache := g.Cache
-  f a := ((a, (g.f a).1), (g.f a).2)
-  df k d := ((d, (g.df k d).1), (g.df k d).2)
+/-- A pair whose first is set, with a function of it in its place. -/
+def mapFirst {A B : Type} (h : A → B) : Cached (prod (latest A) cb) (prod (latest B) cb) :=
+  ⟨Unit, fun a => ((h a.1, a.2), ()), fun _ d => ((h d.1, d.2), ())⟩
 
-theorem beside_ok (g : Cached ca cb) (hg : g.ok) : (beside g).ok := by
-  intro a d
-  have e := hg a d
-  show ((ca.apply d a, cb.apply (g.df (g.f a).2 d).1 (g.f a).1), (g.df (g.f a).2 d).2) =
-    ((ca.apply d a, (g.f (ca.apply d a)).1), (g.f (ca.apply d a)).2)
-  rw [← e]
-
-/-- A pair whose first is `g` of the pair, and whose second is as it was,
-edited as it's edited. -/
-def newFirst (g : Cached (prod ca cb) cc) : Cached (prod ca cb) (prod cc cb) where
-  Cache := g.Cache
-  f a := (((g.f a).1, a.2), (g.f a).2)
-  df k d := (((g.df k d).1, d.2), (g.df k d).2)
-
-theorem newFirst_ok (g : Cached (prod ca cb) cc) (hg : g.ok) : (newFirst g).ok := by
-  intro a d
-  have e := hg a d
-  show ((cc.apply (g.df (g.f a).2 d).1 (g.f a).1, cb.apply d.2 a.2), (g.df (g.f a).2 d).2) =
-    (((g.f ((prod ca cb).apply d a)).1, cb.apply d.2 a.2), (g.f ((prod ca cb).apply d a)).2)
-  rw [← e]
-
-/-- `g`, without the first of the pair it gives. -/
-def dropFirst (g : Cached ca (prod cb cc)) : Cached ca cc where
-  Cache := g.Cache
-  f a := ((g.f a).1.2, (g.f a).2)
-  df k d := ((g.df k d).1.2, (g.df k d).2)
-
-theorem dropFirst_ok (g : Cached ca (prod cb cc)) (hg : g.ok) : (dropFirst g).ok := by
-  intro a d
-  have e := hg a d
-  show (cc.apply (g.df (g.f a).2 d).1.2 (g.f a).1.2, (g.df (g.f a).2 d).2) =
-    ((g.f (ca.apply d a)).1.2, (g.f (ca.apply d a)).2)
-  rw [← e]
-  rfl
+theorem mapFirst_ok {A B : Type} (h : A → B) : (mapFirst (cb := cb) h).ok := fun _ _ => rfl
 
 /-- `g`'s derivative for a run of edits: each edit's run, joined, the cache
 passed from one to the next. -/
@@ -133,70 +98,6 @@ theorem onSecond_ok (g : Inc cb cc) (h : g.ok) : (onSecond (ca := ca) g).ok :=
   fun a d => h a.2 d.2
 
 end Inc
-
-/-- A function of a value that's set, as a value that's set. -/
-def latestMap {A B : Type} (h : A → B) : Cached (latest A) (latest B) :=
-  ⟨Unit, fun a => (h a, ()), fun _ a => (h a, ())⟩
-
-theorem latestMap_ok {A B : Type} (h : A → B) : (latestMap h).ok := fun _ _ => rfl
-
-/-! ## A function, kept -/
-
-section
-variable {ca : EditStructure} {B : Type}
-
-/-- A function of a value, worked out again only when the value isn't the
-same as it was, as `same` sees it; the value goes along beside it. For what
-depends on a part of the value that most edits leave alone. -/
-def memo (g : ca.Value → B) (same : ca.Value → ca.Value → Bool) : Cached ca (latest (ca.Value × B)) where
-  Cache := ca.Value × B
-  f a := ((a, g a), (a, g a))
-  df c d :=
-    let a := ca.apply d c.1
-    let b := if same c.1 a then c.2 else g a
-    ((a, b), (a, b))
-
-theorem memo_ok (g : ca.Value → B) (same : ca.Value → ca.Value → Bool)
-    (sound : ∀ a b, same a b = true → g a = g b) : (memo g same).ok := by
-  intro a d
-  have hb : (if same a (ca.apply d a) then g a else g (ca.apply d a)) = g (ca.apply d a) := by
-    by_cases h : same a (ca.apply d a) = true
-    · simp only [h, ite_true]; exact sound _ _ h
-    · simp only [h]; rfl
-  show (((ca.apply d a, if same a (ca.apply d a) then g a else g (ca.apply d a)) : ca.Value × B),
-    ((ca.apply d a, if same a (ca.apply d a) then g a else g (ca.apply d a)) : ca.Value × B)) = _
-  rw [hb]
-  rfl
-
-end
-
-/-! ## A list, tracked -/
-
-section
-variable {ca : EditStructure} {C A : Type}
-
-/-- A list that's a function of a value, as an incremental function of the
-value's edits: its derivative works the list out again and gives the edits
-from what it was, by `change`. What `carry` gives of the value goes along
-beside it. The edits are as few as `same` sees, so what follows does its
-work only where the list changed. -/
-def tracked (carry : ca.Value → C) (f : ca.Value → List A) (same : A → A → Bool)
-    (refl : ∀ a, same a a = true) : Cached ca (prod (latest C) (runs (Lists.editStructure (plain A)))) where
-  Cache := ca.Value × List A
-  f a := ((carry a, f a), (a, f a))
-  df c d :=
-    let a := ca.apply d c.1
-    ((carry a, Lists.changed (plain A) same refl c.2 (f a)), (a, f a))
-
-theorem tracked_ok (carry : ca.Value → C) (f : ca.Value → List A) (same : A → A → Bool)
-    (refl : ∀ a, same a a = true) (sound : ∀ a b, same a b = true → a = b) :
-    (tracked carry f same refl).ok := by
-  intro a d
-  have hx : Lists.patch (plain A) (Lists.changed (plain A) same refl (f a) (f (ca.apply d a))) (f a) =
-      f (ca.apply d a) := Lists.changed_ok (plain A) same refl sound (f a) (f (ca.apply d a))
-  exact congrArg (fun l => ((carry (ca.apply d a), l), (ca.apply d a, f (ca.apply d a)))) hx
-
-end
 
 /-! ## Scenes -/
 

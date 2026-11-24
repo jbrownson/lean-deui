@@ -1,4 +1,5 @@
 import Progred.Editing
+import Progred.Entries
 import Deui.Redraw
 import Deui.Anchored
 import Deui.Flatten
@@ -87,8 +88,8 @@ def rowHeight (_ : Row) : Nat := Model.lineHeight
 
 def rowScene (r : Row) : Scene := .group 0 0 (lineParts r.val)
 
-/-- The editor's state is the model, edited by what changed: a definition,
-all of them, or the rest. -/
+/-- The editor's state is the model, edited by what changed: something the
+view reads, or the rest. -/
 abbrev edits : EditStructure := ⟨Model, Model.Edit, Model.Edit.apply⟩
 
 /-- The model, and the document laid out: its parts, edited as a list. -/
@@ -99,16 +100,24 @@ abbrev Cells := Std.TreeMap CellId Value
 
 abbrev cellsEdits : EditStructure := ⟨Cells, Model.CellsEdit, Model.CellsEdit.apply⟩
 
-/-- The model, and its definitions with their own edits beside it: an edit
-to the model that writes a definition is an edit here that says which. -/
-abbrev Source : EditStructure := prod (latest Model) (runs cellsEdits)
+/-- The model with its definitions, edited by which were written, and the
+document's parts, edited by which were: what the model's edits say, sorted
+by what they're asked of. -/
+abbrev Source : EditStructure :=
+  prod (prod (latest Model) (runs cellsEdits)) (runs (Lists.editStructure Entries.Parts))
+
+/-- The parts' edits for a run of the model's, each from the model before it. -/
+def source.parts (m : Model) : List Model.Edit → List (Lists.Edit.of Entries.Parts)
+  | [] => []
+  | e :: t => Entries.edits m e ++ source.parts (e.apply m) t
 
 def source : Inc (runs edits) Source :=
-  ⟨fun m => (m, m.doc.cells), fun m es => (run edits es m, es.flatMap Model.Edit.cells?)⟩
+  ⟨fun m => ((m, m.doc.cells), Display.entries m.doc.root),
+   fun m es => ((run edits es m, es.flatMap Model.Edit.cells?), source.parts m es)⟩
 
 theorem source_ok : source.ok := by
   intro m es
-  have h : ∀ (es : List Model.Edit) (m : Model),
+  have cells : ∀ (es : List Model.Edit) (m : Model),
       run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells = (run edits es m).doc.cells := by
     intro es
     induction es with
@@ -118,34 +127,28 @@ theorem source_ok : source.ok := by
       show run cellsEdits (e.cells? ++ t.flatMap Model.Edit.cells?) m.doc.cells = _
       rw [run_append]
       have step : run cellsEdits e.cells? m.doc.cells = (Model.Edit.apply e m).doc.cells := by
-        cases e <;> rfl
+        cases e with
+        | rest _ => rfl
+        | change c => cases c <;> rfl
       rw [step]
       exact ih _
-  show ((run edits es m, run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells) : Model × Cells) =
-    (run edits es m, (run edits es m).doc.cells)
-  rw [h]
-
-/-- The parts' entries, kept while the root is the same. -/
-def entriesKept : Cached Source (latest ((Model × Cells) × List Display.Entry)) :=
-  memo (ca := Source) (fun (a : Model × Cells) => Display.entries a.1.doc.root)
-    (fun (a b : Model × Cells) => equal a.1.doc.root b.1.doc.root)
-
-theorem entriesKept_ok : entriesKept.ok :=
-  memo_ok _ _ fun a b h => by
-    have e : a.1.doc.root = b.1.doc.root := equal_sound _ _ h
-    show Display.entries a.1.doc.root = Display.entries b.1.doc.root
-    rw [e]
-
-/-- The parts' entries, as edits to the list of them, with the model and
-its definitions kept beside: an entry whose value is as it was is no edit. -/
-def entries : Cached Source (prod Source (runs (Lists.editStructure (plain Display.Entry)))) :=
-  Cached.beside (Cached.dropFirst (compose entriesKept
-    (tracked (ca := latest ((Model × Cells) × List Display.Entry))
-      (fun (_ : (Model × Cells) × List Display.Entry) => ())
-      (fun (a : (Model × Cells) × List Display.Entry) => a.2) equal equal_refl)))
-
-theorem entries_ok : entries.ok :=
-  Cached.beside_ok _ (Cached.dropFirst_ok _ (compose_ok _ _ entriesKept_ok (tracked_ok _ _ _ _ equal_sound)))
+  have parts : ∀ (es : List Model.Edit) (m : Model),
+      Lists.patch Entries.Parts (source.parts m es) (Display.entries m.doc.root) =
+        Display.entries (run edits es m).doc.root := by
+    intro es
+    induction es with
+    | nil => intro m; rfl
+    | cons e t ih =>
+      intro m
+      have step : run (Lists.editStructure Entries.Parts) (Entries.edits m e) (Display.entries m.doc.root) =
+          Display.entries (e.apply m).doc.root := Entries.edits_ok m e
+      exact (run_append (Lists.editStructure Entries.Parts) _ _ _).trans
+        ((congrArg (run (Lists.editStructure Entries.Parts) _) step).trans (ih _))
+  show (((run edits es m, run cellsEdits (es.flatMap Model.Edit.cells?) m.doc.cells) : Model × Cells),
+      Lists.patch Entries.Parts (source.parts m es) (Display.entries m.doc.root)) =
+    ((run edits es m, (run edits es m).doc.cells), Display.entries (run edits es m).doc.root)
+  rw [cells, parts]
+  rfl
 
 /-- A table of definitions, as what gives a cell's. -/
 def look (cells : Cells) (c : CellId) : Option Value := cells[c]?
@@ -185,72 +188,38 @@ abbrev Items : EditStructure :=
 /-- Each part with what it reaches. An edit to the definitions is asked of
 each part, and only one that asked for a cell it writes is worked out
 again: writing a definition leaves alone every part that doesn't reach it. -/
-def items : Cached (prod Source (runs (Lists.editStructure (plain Display.Entry)))) Items :=
+def items : Cached Source Items :=
   Cached.carrying (fun (a : Model × Cells) => a)
-    (Lists.sifted (cc := Source) (fun (a : Model × Cells) entry => Display.item (look a.2) entry)
+    (Lists.siftedWhole (cc := prod (latest Model) (runs cellsEdits))
+      (fun (a : Model × Cells) entry => Display.item (look a.2) entry)
       (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) _ item => d.2.any (writes item))
       (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) => d.2.isEmpty))
 
 theorem items_ok : items.ok :=
   Cached.carrying_ok _ _
-    (Lists.sifted_ok _ _ _
+    (Lists.siftedWhole_ok _ _ _
       (fun (c : Model × Cells) (d : Model × List Model.CellsEdit) entry h => item_untouched entry d.2 c.2 h)
       (fun (_ : Model × Cells) (d : Model × List Model.CellsEdit) h _ => by
         have : d.2 = [] := List.isEmpty_iff.mp h
         simp [this]))
 
-/-- Whether two lists of items have their entries at the same positions. -/
-def samePlaces (xs ys : List Display.Item) : Bool :=
-  Lists.alike (fun x y => decide (x.place = y.place)) (fun _ => decide_eq_true rfl) xs ys
-
-/-- The entries' slots, kept while the entries are at the same positions
-and no entry is being added, or the same one is: typing in an entry leaves
-them be. -/
-def slotsKept : Cached Items (latest (((Model × Cells) × List Display.Item) × Display.Slots)) :=
-  memo (ca := Items)
-    (fun (a : (Model × Cells) × List Display.Item) =>
-      (⟨Display.slotsOf (a.2.map Display.Item.place) (Display.pendingEntry a.1.1.selection)⟩ : Display.Slots))
-    (fun (a b : (Model × Cells) × List Display.Item) =>
-      samePlaces a.2 b.2 &&
-        decide (Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection))
-
-theorem slotsKept_ok : slotsKept.ok :=
-  memo_ok _ _ fun a b h => by
-    simp only [Bool.and_eq_true] at h
-    have e1 : a.2.map Display.Item.place = b.2.map Display.Item.place := Lists.all2_map _ _ _ h.1
-    have e2 : Display.pendingEntry a.1.1.selection = Display.pendingEntry b.1.1.selection := of_decide_eq_true h.2
-    show (⟨Display.slotsOf (a.2.map Display.Item.place) (Display.pendingEntry a.1.1.selection)⟩ : Display.Slots) =
-      ⟨Display.slotsOf (b.2.map Display.Item.place) (Display.pendingEntry b.1.1.selection)⟩
-    rw [e1, e2]
-
-/-- The model, with what's around every part: what the model shows, worked
-out once, and the slots. -/
-def around : Cached Items (latest (Model × Display.Around)) :=
-  compose slotsKept
-    (latestMap fun (a : ((Model × Cells) × List Display.Item) × Display.Slots) =>
-      (a.1.1.1, (⟨a.1.1.1.seen, a.2⟩ : Display.Around)))
-
-theorem around_ok : around.ok := compose_ok _ _ slotsKept_ok (latestMap_ok _)
-
-/-- Each part's input. A change of what's around is asked of each part, and
-only a part it touches is given a new input: a selection that moves makes
-edits at the parts it leaves and enters, and a part whose item changed is
-an edit at that part. -/
+/-- Each part's input. A change of what the model shows is asked of each
+part, and only a part it touches is given a new input: a selection that
+moves makes edits at the parts it leaves and enters. -/
 def inputs : Cached Items (prod (latest Model) (runs (Lists.editStructure (whole (plain Display.Input))))) :=
-  compose (Cached.newFirst around)
-    (Cached.carrying (fun (a : Model × Display.Around) => a.1)
-      (Lists.siftedWhole (cc := latest (Model × Display.Around))
-        (fun (a : Model × Display.Around) item => Display.inputOf a.2 item)
-        (fun (a b : Model × Display.Around) item was => Display.touchedAround a.2 b.2 item was)
-        (fun (a b : Model × Display.Around) => Display.stillAround a.2 b.2)))
+  compose (Cached.mapFirst fun (a : Model × Cells) => (a.1, a.1.seen))
+    (Cached.carrying (fun (a : Model × Display.Seen) => a.1)
+      (Lists.siftedWhole (cc := latest (Model × Display.Seen))
+        (fun (a : Model × Display.Seen) item => Display.input a.2 item)
+        (fun (a b : Model × Display.Seen) item _ => Display.touched a.2 b.2 item)
+        (fun (a b : Model × Display.Seen) => Display.still a.2 b.2)))
 
 theorem inputs_ok : inputs.ok :=
-  compose_ok _ _ (Cached.newFirst_ok _ around_ok)
+  compose_ok _ _ (Cached.mapFirst_ok _)
     (Cached.carrying_ok _ _
       (Lists.siftedWhole_ok _ _ _
-        (fun (c d : Model × Display.Around) item h => Display.inputOf_of_not_touched c.2 d.2 item h)
-        (fun (c d : Model × Display.Around) h item =>
-          Display.not_touchedAround_of_still c.2 d.2 h item (Display.inputOf c.2 item))))
+        (fun (c d : Model × Display.Seen) item h => Display.input_of_not_touched c.2 d.2 item h)
+        (fun (c d : Model × Display.Seen) h item => Display.not_touched_of_still c.2 d.2 h item)))
 
 /-- A part's layout, of its input. -/
 def partInc : Inc (plain Display.Input) (plain Display.Block) := ⟨Display.part, fun _ e => nomatch e⟩
@@ -260,12 +229,11 @@ theorem partInc_ok : partInc.ok := fun _ e => nomatch e
 /-- The document laid out, as an incremental function of the model: a part
 is laid out again only where its input changed. -/
 def layout : Cached (runs edits) Laid :=
-  compose (compose (compose (compose (cached source) entries) items) inputs)
+  compose (compose (compose (cached source) items) inputs)
     (Cached.second (cached (Lists.map.inc (whole.lift partInc))))
 
 theorem layout_ok : layout.ok :=
-  compose_ok _ _
-    (compose_ok _ _ (compose_ok _ _ (compose_ok _ _ (cached_ok _ source_ok) entries_ok) items_ok) inputs_ok)
+  compose_ok _ _ (compose_ok _ _ (compose_ok _ _ (cached_ok _ source_ok) items_ok) inputs_ok)
     (Cached.second_ok _ (cached_ok _ (Lists.map_inc_ok _ (whole_lift_ok _ partInc_ok))))
 
 /-- How far the lines' top is above the window's top. -/
@@ -274,13 +242,14 @@ def offset (m : Model) : Int := (m.scroll : Int) - Model.margin
 /-- The model, and the lines of the document's parts, joined. -/
 abbrev Lines : EditStructure := prod (latest Model) (runs (Lists.editStructure (plain Row)))
 
-/-- The parts' lines, joined: a part laid out again makes edits only at the
-lines of its own that differ from what they were. -/
+/-- The parts' lines, joined: a part laid out again has its lines taken out
+and its new ones put in. Without a derivative of a part's layout, its lines
+are all new. -/
 def lines : Cached Laid Lines :=
-  Cached.second (cached (Lists.flatBy.inc (cb := whole (plain Display.Block)) rowsOf fun a b => decide (a = b)))
+  Cached.second (cached (Lists.flatBy.inc (cb := whole (plain Display.Block)) rowsOf))
 
 theorem lines_ok : lines.ok :=
-  Cached.second_ok _ (cached_ok _ (Lists.flatBy_inc_ok _ _ fun _ _ h => of_decide_eq_true h))
+  Cached.second_ok _ (cached_ok _ (Lists.flatBy_inc_ok _))
 
 /-- The lines, at the scroll offset. -/
 def placedRows : Inc Lines (runs (Lists.Scrolled.At.edits (plain Row))) :=
@@ -299,7 +268,7 @@ theorem window_ok (height : Nat) : (window height).ok :=
 
 /-- How many parts an edit lays out again before the window's lines are
 worked out afresh, not edit by edit: an edit that large costs more that way. -/
-def manyParts : Nat := 48
+def manyParts : Nat := 1
 
 /-- The window's lines, whatever its height: a new height shows them anew,
 and so does an edit that lays out many parts at once. -/
@@ -409,13 +378,13 @@ def event (here : Model.Layout) (laid : Model → Model.Layout) (m : Model) (sce
   | .press px_ py 0 true =>
     match scene.hit (App.coordinate px_) (App.coordinate py) with
     | some h => clicked here m h
-    | .none => { m with selection := .none }
+    | .none => m.change (.select .none)
   | .scroll _ _ _ dy =>
     let lines := here.lineCount
     let most := (lines * Model.lineHeight + 2 * Model.margin) - min m.height (lines * Model.lineHeight + 2 * Model.margin)
     let step := 3 * Model.lineHeight
-    { m with scroll := if dy > 0 then m.scroll - min m.scroll step else min most (m.scroll + step) }
-  | .resize w h => { m with width := w.toNat, height := h.toNat }
+    m.change (.scroll (if dy > 0 then m.scroll - min m.scroll step else min most (m.scroll + step)))
+  | .resize w h => m.change (.size w.toNat h.toNat)
   | _ => m
 
 def app : App.App edits where

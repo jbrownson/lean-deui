@@ -1,4 +1,5 @@
 import Deui.Combine
+import Deui.Scroll
 
 /-!
 A list at an offset: rows, and how far their top is above a window's top,

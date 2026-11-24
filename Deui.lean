@@ -6,7 +6,7 @@ import Deui.Drawing
 import Deui.Scroll
 import Deui.Drawn
 import Deui.Redraw
-import Deui.Diff
+import Deui.Spans
 import Deui.Combine
 import Deui.Sift
 import Deui.Flatten

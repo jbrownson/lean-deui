@@ -33,12 +33,6 @@ new axiom. -/
 /-- info: 'Deui.Drawing.inc_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Drawing.inc_ok
 
-/-- info: 'Deui.Lists.change_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.Lists.change_ok
-
-/-- info: 'Deui.tracked_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.tracked_ok
-
 /-- info: 'Deui.Cached.second_ok' does not depend on any axioms -/
 #guard_msgs in #print axioms Deui.Cached.second_ok
 
@@ -51,20 +45,8 @@ new axiom. -/
 /-- info: 'Deui.keyed_ok' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.keyed_ok
 
-/-- info: 'Deui.Lists.flat_inc_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.Lists.flat_inc_ok
-
 /-- info: 'Deui.Lists.Scrolled.anchored_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Lists.Scrolled.anchored_ok
-
-/-- info: 'Deui.memo_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.memo_ok
-
-/-- info: 'Deui.Lists.changed_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.Lists.changed_ok
-
-/-- info: 'Deui.Lists.flatChange_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.Lists.flatChange_ok
 
 /-- info: 'Deui.Lists.Scrolled.At.inc_ok' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.Lists.Scrolled.At.inc_ok

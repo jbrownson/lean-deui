@@ -94,10 +94,11 @@ def main (args : List String) : IO Unit := do
       let m ← timed "typing in its definition" m ("named".toList.map fun c => App.Event.text c.toString)
       let m ← if path.toNat?.isSome then do
           let m ← timedEdits "a definition a tenth of the entries reach, written" m
-            ((List.range 20).map fun j => [Model.Edit.cell shared[3]! (some (sharedValue 3 (j + 1)))])
+            ((List.range 20).map fun j => [Model.Edit.change (.cell shared[3]! (some (sharedValue 3 (j + 1))))])
           let m ← timedEdits "every definition written at once" m
-            ((List.range 5).map fun j => [Model.Edit.cells
-              ((List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k (100 + j))) {})])
+            ((List.range 5).map fun j => [Model.Edit.change (.document
+              { m.state.doc with cells :=
+                  (List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k (100 + j))) {} })])
           pure m
         else pure m
       if !(m.shown.1 == (Editor.view.f m.state).1) then IO.println "  !! the scene kept isn't the model's view"

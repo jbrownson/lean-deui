@@ -144,8 +144,11 @@ unsafe def edits (rt : Run.Runtime) (memo : Memo) (functions : Functions) (file 
     changed := true
   if m'.stale then
     let layouts ← project rt functions m'
-    m' := { m' with results := ← evaluate rt memo m', stale := false,
-                    layouts := if layouts = m'.layouts.val then m'.layouts else ⟨layouts⟩ }
+    let results ← evaluate rt memo m'
+    -- What Lean gave goes in as changes, where it's not what's there.
+    if results != m'.results then m' := m'.change (.results results)
+    if layouts != m'.layouts.val then m' := m'.change (.layouts ⟨layouts⟩)
+    m' := { m' with stale := false }
     changed := true
   if m.saveAsked then
     if let some path := file then
