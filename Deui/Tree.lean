@@ -315,28 +315,33 @@ end
 variable {cc : EditStructure}
 
 /-- A tree's frames, as an incremental function of a context and the tree.
-`stale` says whether an edit of the context could change a node's own doc,
-and `calm` whether an edit of the context changes none. An edit of the tree
-is the same edit of the frames; an edit of the context that isn't calm
-draws the stale nodes again, and walks the rest. -/
-def drawn (own : cc.Value → L → Fit.Doc S) (stale : cc.Value → cc.Edit → L → Bool) (calm : cc.Edit → Bool) :
-    Inc (prod cc (runs (edits L))) (runs (Fit.edits S)) where
+`prepare` works out once what an edit of the context is; `stale` says
+from that whether the edit could change a node's own doc, and `calm`
+whether an edit of a context changes none. An edit of the tree is the same
+edit of the frames; an edit of the context that isn't calm draws the stale
+nodes again, and walks the rest. -/
+def drawn {P : Type} (own : cc.Value → L → Fit.Doc S) (prepare : cc.Value → cc.Edit → P) (stale : P → L → Bool)
+    (calm : cc.Value → cc.Edit → Bool) : Inc (prod cc (runs (edits L))) (runs (Fit.edits S)) where
   f a := frame (own a.1) a.2
   df a d :=
     let after := lift.run (framed (own (cc.apply d.1 a.1))) d.2 a.2
-    if calm d.1 then after else refresh (own (cc.apply d.1 a.1)) (stale a.1 d.1) a.2 ++ after
+    if calm a.1 d.1 then after
+    else
+      let prepared := prepare a.1 d.1
+      refresh (own (cc.apply d.1 a.1)) (stale prepared) a.2 ++ after
 
 /-- Drawing under a context is right, if a calm edit changes no node's
 doc, and an edit changes only the docs of nodes it makes stale. -/
-theorem drawn_ok (own : cc.Value → L → Fit.Doc S) (stale : cc.Value → cc.Edit → L → Bool) (calm : cc.Edit → Bool)
-    (hcalm : ∀ c d l, calm d = true → own (cc.apply d c) l = own c l)
-    (hstale : ∀ c d l, stale c d l = false → own (cc.apply d c) l = own c l) :
-    (drawn (S := S) own stale calm).ok := by
+theorem drawn_ok {P : Type} (own : cc.Value → L → Fit.Doc S) (prepare : cc.Value → cc.Edit → P)
+    (stale : P → L → Bool) (calm : cc.Value → cc.Edit → Bool)
+    (hcalm : ∀ c d l, calm c d = true → own (cc.apply d c) l = own c l)
+    (hstale : ∀ c d l, stale (prepare c d) l = false → own (cc.apply d c) l = own c l) :
+    (drawn (S := S) own prepare stale calm).ok := by
   intro a d
   have after := lift_ok (framed (S := S) (own (cc.apply d.1 a.1))) (framed_ok _) a.2 d.2
   show run (Fit.edits S) _ (frame (own a.1) a.2) = frame (own (cc.apply d.1 a.1)) (run (edits L) d.2 a.2)
   simp only [drawn]
-  cases hc : calm d.1 with
+  cases hc : calm a.1 d.1 with
   | true =>
     have same : own (cc.apply d.1 a.1) = own a.1 := funext fun l => hcalm a.1 d.1 l hc
     simp only [ite_true]
@@ -344,7 +349,7 @@ theorem drawn_ok (own : cc.Value → L → Fit.Doc S) (stale : cc.Value → cc.E
     exact after
   | false =>
     simp only [Bool.false_eq_true, ite_false]
-    rw [run_append, refresh_ok (own a.1) (own (cc.apply d.1 a.1)) (stale a.1 d.1) (hstale a.1 d.1) a.2]
+    rw [run_append, refresh_ok (own a.1) (own (cc.apply d.1 a.1)) (stale (prepare a.1 d.1)) (hstale a.1 d.1) a.2]
     exact after
 
 /-! ## Drawn from what's looked up -/

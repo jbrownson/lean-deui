@@ -331,11 +331,11 @@ theorem relinkCell_ok (ln ln' : Links) (touched : CellId → Bool)
 
 /-! ## The tree, as an incremental function -/
 
-/-- What a part is drawn under: the ribbon, the folds, and the
-definitions. -/
-abbrev Under : EditStructure := prod (latest (Nat × List (Path × Bool))) (runs cellsEdits)
+/-- What a part is drawn under: what of the editor's state it's drawn
+with, and the definitions. -/
+abbrev Under : EditStructure := prod (latest Display.Seen) (runs cellsEdits)
 
-def links (u : Under.Value) : Links := ⟨u.2, u.1.2⟩
+def links (u : Under.Value) : Links := ⟨u.2, u.1.folds⟩
 
 /-- A run of writes, as the value after and the edits of its tree. -/
 def rewrites (hang : Path → Hint → CellId → List (Tree Label)) (path : Path) (hint : Hint) :
@@ -385,7 +385,7 @@ def treed.df (path : Path) (hint : Hint) (u : Under.Value) (v : Value) (t : Tree
     (ws : List (List Step × Option Value)) : List (Tree.Edit Label) × Value :=
   let u' := Under.apply d u
   let first :=
-    if d.2.isEmpty && decide (d.1.2 = u.1.2) then []
+    if d.2.isEmpty && decide (d.1.folds = u.1.folds) then []
     else relinkTree (relinkCell (links u) (links u') (touchedBy d.2) follows) t
   let made := rewrites (linked (links u') follows) path hint ws v
   (first ++ made.1, made.2)
@@ -410,18 +410,18 @@ theorem treed_df_ok (path : Path) (hint : Hint) (u : Under.Value) (v : Value) (d
   simp only [treed.df]
   rw [run_append]
   have first : run (Tree.edits Label)
-      (if d.2.isEmpty && decide (d.1.2 = u.1.2) then []
+      (if d.2.isEmpty && decide (d.1.folds = u.1.folds) then []
         else relinkTree (relinkCell (links u) (links (Under.apply d u)) (touchedBy d.2) follows)
           (grown (links u) path hint v)) (grown (links u) path hint v) =
       grown (links (Under.apply d u)) path hint v := by
-    cases hc : (d.2.isEmpty && decide (d.1.2 = u.1.2)) with
+    cases hc : (d.2.isEmpty && decide (d.1.folds = u.1.folds)) with
     | true =>
-      obtain ⟨h1, h2⟩ : d.2 = [] ∧ d.1.2 = u.1.2 := by simpa using hc
-      obtain ⟨⟨r, folds⟩, cells⟩ := u
-      obtain ⟨⟨r', folds'⟩, ces⟩ := d
+      obtain ⟨h1, h2⟩ : d.2 = [] ∧ d.1.folds = u.1.folds := by simpa using hc
+      obtain ⟨seen, cells⟩ := u
+      obtain ⟨seen', ces⟩ := d
       cases h1
-      cases h2
-      rfl
+      show grown ⟨cells, seen.folds⟩ path hint v = grown ⟨cells, seen'.folds⟩ path hint v
+      rw [h2]
     | false =>
       simp only [Bool.false_eq_true, ite_false]
       exact relinkTree_ok _ _ _

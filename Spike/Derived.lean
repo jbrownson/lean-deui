@@ -56,19 +56,21 @@ value. -/
 structure Step' where
   ces : List Model.CellsEdit := []
   writes : List (List Step × Option Value) := []
-  /-- The folds in effect from this step. -/
+  /-- The folds in effect from this step, and the selection. -/
   folds : List (Path × Bool) := []
+  selection : Option Selection := none
 
 abbrev OldCache := Editor.part.Cache
 /-- The derived lines of a value at the root. -/
 def derived : Cached (prod Derived.Under (runs Derived.Writes)) Derived.Lines :=
-  Derived.lines {} [] (.value false)
+  Derived.lines [] (.value false)
 
 abbrev NewCache := derived.Cache
 
 structure State where
   cells : Editor.Cells
   folds : List (Path × Bool)
+  selection : Option Selection
   value : Value
   old : OldCache
   new : NewCache
@@ -80,14 +82,18 @@ def seen : Display.Seen := {}
 def oldF (cells : Editor.Cells) (value : Value) : List Line × OldCache :=
   Editor.part.f ((seen, cells), .whole (some value))
 
-def newF (cells : Editor.Cells) (value : Value) (folds : List (Path × Bool) := []) : List Line × NewCache :=
-  derived.f ((((80 : Nat), folds), cells), value)
+def newF (cells : Editor.Cells) (value : Value) (folds : List (Path × Bool) := [])
+    (selection : Option Selection := none) : List Line × NewCache :=
+  derived.f ((({ folds, selection } : Display.Seen), cells), value)
+
+/-- What a step draws with. -/
+def Step'.seen (step : Step') : Display.Seen := { folds := step.folds, selection := step.selection }
 
 def oldDf (k : OldCache) (step : Step') : Editor.PartLines.Edit × OldCache :=
-  Editor.part.df k ((({ folds := step.folds } : Display.Seen), step.ces), step.writes.map fun (rel, w) => .write rel w)
+  Editor.part.df k ((step.seen, step.ces), step.writes.map fun (rel, w) => .write rel w)
 
 def newDf (k : NewCache) (step : Step') : Editor.PartLines.Edit × NewCache :=
-  derived.df k ((((80 : Nat), step.folds), step.ces), step.writes)
+  derived.df k ((step.seen, step.ces), step.writes)
 
 def applied (es : Editor.PartLines.Edit) (ls : List Line) : List Line := Editor.PartLines.apply es ls
 
@@ -100,7 +106,7 @@ def start (n : Nat) : IO State := do
   let t2 ← IO.monoNanosNow
   IO.println s!"{old.1.length} lines; from nothing: as it is {(t1 - t0) / 1000} µs, derived {(t2 - t1) / 1000} µs"
   if !(decide (old.1 = new.1)) then IO.println "  !! the two draw different lines"
-  return ⟨cells0, [], value, old.2, new.2, old.1, new.1⟩
+  return ⟨cells0, [], none, value, old.2, new.2, old.1, new.1⟩
 
 /-- Runs steps through both, timing each, and checks what each keeps
 against its lines from nothing. -/
@@ -120,12 +126,12 @@ def timed (name : String) (s : State) (steps : List Step') : IO State := do
     newTime := newTime + (t2 - t1)
     oldEdits := oldEdits + old.1.length
     newEdits := newEdits + new.1.length
-    s := { cells := run Editor.cellsEdits step.ces s.cells, folds := step.folds,
+    s := { cells := run Editor.cellsEdits step.ces s.cells, folds := step.folds, selection := step.selection,
            value := run Derived.Writes step.writes s.value,
            old := old.2, new := new.2, oldLines := applied old.1 s.oldLines, newLines := applied new.1 s.newLines }
   let n := steps.length
   IO.println s!"  {name}: as it is {oldTime / n / 1000} µs ({oldEdits / n} line edits), derived {newTime / n / 1000} µs ({newEdits / n})"
-  let fresh := (newF s.cells s.value s.folds).1
+  let fresh := (newF s.cells s.value s.folds s.selection).1
   if !(decide (s.newLines = fresh)) then IO.println "  !! derived: the lines kept aren't the lines from nothing"
   if !(decide (s.oldLines = fresh)) then IO.println "  !! as it is: the lines kept aren't the derived lines from nothing"
   return s
@@ -180,18 +186,56 @@ def timedParts (name : String) (ps : List Position) (cells : Editor.Cells) (part
     if !(decide (part.oldLines = fresh)) then IO.println "  !! as it is: the lines kept aren't the derived lines from nothing"
   return (cells, parts)
 
-/-- A part's lines as the view draws them now, with nothing selected. -/
-def oldPart (cells : Editor.Cells) (entry : Display.Entry) : List Line :=
-  Display.part (Display.input {} (Display.item (Editor.look cells) entry))
+/-- A part's lines as the view draws them now. -/
+def oldPart (cells : Editor.Cells) (entry : Display.Entry) (sel : Option Selection := none) : List Line :=
+  Display.part (Display.input { selection := sel } (Display.item (Editor.look cells) entry))
 
-/-- A part's lines, derived; none for a part with no value. -/
-def newPart (cells : Editor.Cells) : Display.Entry → Option (List Line)
-  | .entry p v => some ((Derived.lines {} Display.entriesPath (.entry p)).f ((((80 : Nat), ([] : List (Path × Bool))), cells), .list [(p, v)])).1
-  | .end_ => some ((Derived.lines {} Display.entriesPath .end_).f ((((80 : Nat), ([] : List (Path × Bool))), cells), .list [])).1
-  | .whole (some v) => some ((Derived.lines {} [] (.value false)).f ((((80 : Nat), ([] : List (Path × Bool))), cells), v)).1
+/-- A part's lines, derived, with the selection as the part sees it; none
+for a part with no value. -/
+def newPart (cells : Editor.Cells) (entry : Display.Entry) (sel : Option Selection := none) : Option (List Line) :=
+  let seen := (Display.input { selection := sel } (Display.item (Editor.look cells) entry)).selection
+  let under : Derived.Under.Value := ({ selection := seen }, cells)
+  match entry with
+  | .entry p v => some ((Derived.lines Display.entriesPath (.entry p)).f (under, .list [(p, v)])).1
+  | .end_ => some ((Derived.lines Display.entriesPath .end_).f (under, .list [])).1
+  | .whole (some v) => some ((Derived.lines [] (.value false)).f (under, v)).1
   | .whole none => none
 
-/-- Which parts of a file the two draw the same, and where the first of
+/-- Whether two parts' lines are the same, but for this: where a label is
+being typed for a new field, the view as it is draws the `: _` after it in
+a frame of its own, as no occurrence, and derived it's the record's own. -/
+def agree (label : Bool) (old new : List Line) : Bool :=
+  if !label then decide (old = new)
+  else
+    old.length == new.length && (old.zip new).all fun (a, b) =>
+      a.indent == b.indent && a.cells.length == b.cells.length && (a.cells.zip b.cells).all fun (x, y) =>
+        if x.occ.isNone then x.text == y.text && decide (x.face = y.face) else decide (x = y)
+
+/-- The selections to try at an occurrence: typing over a value, a hole
+being filled, an element, a field or an entry being added, a label typed. -/
+def selectionsAt (o : Occ) : List Selection :=
+  let typed (picker : Bool) : Editing := { text := "ab", caret := 1, picker }
+  let fresh : CellId := cell! "5e1ec7ed00000000000000000000abcd"
+  match o.kind with
+  | .value => [{ path := o.path, editing := some (typed false) }, { path := o.path, editing := some (typed true) }]
+  | .hole =>
+    [{ path := o.path, stage := .pending, editing := some (typed true) },
+     { path := o.path, editing := some (typed true) }, { path := o.path, stage := .pending }]
+  | .insertion => [{ path := o.path, stage := .pending }, { path := o.path, stage := .pending, editing := some (typed true) }]
+  | .fieldEnd =>
+    [{ path := o.path, stage := .label, editing := some (typed false) },
+     { path := o.path ++ [.key fresh], stage := .pending },
+     { path := o.path ++ [.key Kinds.returns], stage := .pending, editing := some (typed true) },
+     { path := o.path ++ [.key Kinds.type_], stage := .pending }]
+  | .label => [{ path := o.path, stage := .pending }]
+  | .entryPoint =>
+    [{ path := Display.entriesPath ++ [.element [7, 7, 7]], stage := .pending, anchor := some o.path },
+     { path := Display.entriesPath ++ [.element [7, 7, 7]], stage := .pending, anchor := some o.path,
+       editing := some (typed true) }]
+  | .computed => []
+
+/-- Which parts of a file the two draw the same, with nothing selected and
+with each of the selections its occurrences give, and where the first of
 the rest part ways. -/
 def compare (path : String) (verbose : Bool) : IO Unit := do
   let text ← IO.FS.readFile path
@@ -201,6 +245,8 @@ def compare (path : String) (verbose : Bool) : IO Unit := do
     let parts := Display.entries d.root
     let mut same := 0
     let mut shown := 0
+    let mut tried := 0
+    let mut agreed := 0
     for part in parts do
       let old := oldPart d.cells part
       match newPart d.cells part with
@@ -211,8 +257,25 @@ def compare (path : String) (verbose : Bool) : IO Unit := do
           match (old.zip new).find? fun (a, b) => !decide (a = b) with
           | some (a, b) => IO.println s!"    as it is: {a.plain}\n    derived:  {b.plain}"
           | none => IO.println s!"    {old.length} lines as it is, {new.length} derived"
+        -- The selections its occurrences give: the first forty places, each kind of occurrence there.
+        let occs := (old.flatMap fun l => l.cells.filterMap (·.occ)).foldl
+          (fun (acc : List Occ) o => if acc.any (fun x => x.path == o.path && x.kind == o.kind) then acc else o :: acc) []
+        for o in occs.reverse.take 40 do
+          for sel in selectionsAt o do
+            let oldS := oldPart d.cells part (some sel)
+            match newPart d.cells part (some sel) with
+            | some newS =>
+              tried := tried + 1
+              if agree (sel.stage == .label) oldS newS then agreed := agreed + 1
+              else if verbose && shown < 6 then
+                shown := shown + 1
+                IO.println s!"    selected {repr sel.stage} at {sel.path.length} steps, {repr o.kind}:"
+                match (oldS.zip newS).find? fun (a, b) => !decide (a = b) with
+                | some (a, b) => IO.println s!"    as it is: {a.plain}\n    derived:  {b.plain}"
+                | none => IO.println s!"    {oldS.length} lines as it is, {newS.length} derived"
+            | none => pure ()
       | none => pure ()
-    IO.println s!"{path}: {same} of {parts.length} parts drawn the same"
+    IO.println s!"{path}: {same} of {parts.length} parts drawn the same; {agreed} of {tried} with something selected"
 
 def main (args : List String) : IO Unit := do
   let files := args.filter (·.endsWith ".gid")
@@ -231,6 +294,12 @@ def main (args : List String) : IO Unit := do
   let steps : List (String × List Step') := [
     ("typing in a text", reps.map fun j =>
       { writes := [([.element (at_ j), .key Kinds.name, .key Kinds.bytes], some (.blob s!"entry, typed {j}".toUTF8.toList))] }),
+    ("a keystroke in a text", reps.map fun j =>
+      { selection := some { path := [.element (at_ 3), .key Kinds.name],
+                            editing := some { text := s!"typed {j}", caret := j % 5, picker := false } } }),
+    ("a place for a field, and a keystroke in it", reps.map fun j =>
+      { selection := some { path := [.element (at_ 3), .key Kinds.value], stage := .pending,
+                            editing := some { text := s!"{j}", caret := 1, picker := true } } }),
     ("an element added to a list", reps.map fun j =>
       { writes := [([.element (at_ j), .key Kinds.fields, .element added], some (Value.u64 7))] }),
     ("an element taken away", reps.map fun j =>
@@ -265,7 +334,8 @@ def main (args : List String) : IO Unit := do
       parts := parts.push ⟨v, old.2, new.2, old.1, new.1⟩
     let mut cells := cells0
     for (name, run) in steps do
-      if !name.startsWith "an entry" && !name.startsWith "a cell folded" then
+      if !name.startsWith "an entry" && !name.startsWith "a cell folded" && !name.startsWith "a keystroke" &&
+          !name.startsWith "a place" then
         (cells, parts) ← timedParts name ps cells parts run
   else
     let mut s ← start n

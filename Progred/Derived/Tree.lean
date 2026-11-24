@@ -34,6 +34,9 @@ structure Label where
   leaf : Bool
   /-- For a cell: whether its definition's tree is hung under it. -/
   opened : Bool := false
+  /-- How many steps its path is: a node is asked whether a selection is
+  at it, or a step in, at every keystroke, and most can tell by this. -/
+  depth : Nat := 0
 
 /-- Whether a value is drawn whole, with no kids: a literal. It reads no
 further than the value's fields. -/
@@ -57,7 +60,7 @@ def reads (v : Value) : Bool :=
 
 /-- A node's label, from its value and that value without what's inside. -/
 def labelOf (path : Path) (hint : Hint) (sv v : Value) : Label :=
-  ⟨path, hint, sv, if reads sv then some v else none, whole sv, false⟩
+  ⟨path, hint, sv, if reads sv then some v else none, whole sv, false, path.length⟩
 
 def label (path : Path) (hint : Hint) (v : Value) : Label := labelOf path hint (shallow v) v
 
