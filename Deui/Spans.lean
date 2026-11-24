@@ -52,4 +52,38 @@ theorem deletes_ok' (ca : EditStructure) (pre mid suf l l' : List ca.Value) (h1 
     (h2 : l' = pre ++ suf) : patch ca (deletes ca pre.length mid.length) l = l' := by
   subst h1; subst h2; exact deletes_ok ca pre mid suf
 
+theorem update_at {B : Type} (pre : List B) (x : B) (xs : List B) (y : B) :
+    update (whole (plain B)) (pre ++ x :: xs) pre.length (.replace y) = pre ++ y :: xs := by
+  have h := Scrolled.update_append_add (whole (plain B)) pre (x :: xs) (.replace y) 0
+  simp only [Nat.add_zero, update, whole.apply] at h
+  exact h
+
+/-- Puts `new` where `old` is, at `p`: each element replaced where both
+have one, then what's left of `new` inserted, or of `old` deleted. -/
+def swaps {B : Type} (p : Nat) : List B → List B → List (Edit.of (whole (plain B)))
+  | _ :: os, n :: ns => .update p (.replace n) :: swaps (p + 1) os ns
+  | [], ns => inserts (whole (plain B)) p ns
+  | os, [] => deletes (whole (plain B)) p os.length
+
+theorem swaps_ok {B : Type} (pre old new suf : List B) :
+    patch (whole (plain B)) (swaps pre.length old new) (pre ++ old ++ suf) = pre ++ new ++ suf := by
+  induction old generalizing pre new with
+  | nil =>
+    have h : swaps pre.length ([] : List B) new = inserts (whole (plain B)) pre.length new := by
+      cases new <;> rfl
+    rw [h]
+    exact inserts_ok' (whole (plain B)) pre new suf _ _ (by rw [List.append_nil]; rfl) rfl
+  | cons o os ih =>
+    cases new with
+    | nil => exact deletes_ok' (whole (plain B)) pre (o :: os) suf _ _ rfl (by rw [List.append_nil]; rfl)
+    | cons n ns =>
+      show patch (whole (plain B)) (swaps (pre.length + 1) os ns)
+        (update (whole (plain B)) (pre ++ o :: os ++ suf) pre.length (.replace n)) = _
+      have e : pre ++ o :: os ++ suf = pre ++ o :: (os ++ suf) := by simp
+      rw [e, update_at]
+      have h := ih (pre ++ [n]) ns
+      simp only [List.length_append, List.length_cons, List.length_nil, Nat.zero_add, List.append_assoc,
+        List.cons_append, List.nil_append] at h
+      simpa using h
+
 end Deui.Lists

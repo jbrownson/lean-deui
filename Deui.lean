@@ -11,6 +11,10 @@ import Deui.Combine
 import Deui.Sift
 import Deui.Flatten
 import Deui.Anchored
+import Deui.Text
+import Deui.Fit
+import Deui.Join
+import Deui.Under
 import Deui.App
 import Deui.Screen
 import Deui.Axioms

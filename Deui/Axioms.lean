@@ -5,6 +5,9 @@ import Deui.App
 import Deui.Flatten
 import Deui.Anchored
 import Deui.Sift
+import Deui.Fit
+import Deui.Join
+import Deui.Under
 
 /-! Every law's axioms, checked by `lake build`: it fails on a `sorry` or a
 new axiom. -/
@@ -62,3 +65,18 @@ new axiom. -/
 
 /-- info: 'Deui.Lists.siftedWith_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Lists.siftedWith_ok
+
+/-- info: 'Deui.Text.splice_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Text.splice_ok
+
+/-- info: 'Deui.Text.rows_ok' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Deui.Text.rows_ok
+
+/-- info: 'Deui.Fit.fit_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Fit.fit_ok
+
+/-- info: 'Deui.Lists.join_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Lists.join_ok
+
+/-- info: 'Deui.Lists.mapUnder_ok' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Lists.mapUnder_ok

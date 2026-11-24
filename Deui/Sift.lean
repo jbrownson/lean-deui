@@ -1,5 +1,5 @@
 import Deui.Combine
-import Deui.Scroll
+import Deui.Spans
 
 /-!
 A list mapped under a context: each element's result is a function of the
@@ -29,12 +29,6 @@ def sift.refresh (g : A → B) (t : A → B → Bool) :
       (.update i (.replace (g a)) :: (sift.refresh g t (i + 1) as bs).1, g a :: (sift.refresh g t (i + 1) as bs).2)
     else ((sift.refresh g t (i + 1) as bs).1, b :: (sift.refresh g t (i + 1) as bs).2)
   | _, _, bs => ([], bs)
-
-theorem update_at (pre : List B) (x : B) (xs : List B) (y : B) :
-    update (whole (plain B)) (pre ++ x :: xs) pre.length (.replace y) = pre ++ y :: xs := by
-  have h := Scrolled.update_append_add (whole (plain B)) pre (x :: xs) (.replace y) 0
-  simp only [Nat.add_zero, update, whole.apply] at h
-  exact h
 
 /-- The refreshed results are the elements' results under the new context,
 and the edits take the old results to them. -/
