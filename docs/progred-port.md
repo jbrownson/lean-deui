@@ -320,8 +320,8 @@ On 300 entries, 3,300 lines, each edit made 20 times at different places
 | an element added to a list | 2.4 ms | 0.5 ms | 80 µs | 44 µs |
 | a field added to a record | 2.5 ms | 0.5 ms | 56 µs | 21 µs |
 | an entry added | 2.7 ms | 0.9 ms | | |
-| a cell a tenth of the entries show, renamed | 36 ms | 10.5 ms | 3.8 ms | 1.7 ms |
-| a label every entry has, renamed | 34 ms | 88 ms | 30 ms | 10 ms |
+| a cell a tenth of the entries show, renamed | 35 ms | 5 ms | 3.8 ms | 1.7 ms |
+| a label every entry has, renamed | 35 ms | 37 ms | 30 ms | 10 ms |
 | a cell nothing shows, written | 1 µs | 0.3 ms | 0.5 ms | 1 ms |
 
 What that says:
@@ -332,11 +332,14 @@ What that says:
 - A rename gives 30 line edits, or 300, where the view as it is gives
   thousands: only the nodes that show the name are drawn again. In a part
   of their own that's two to three times quicker.
-- In one part, 300 nodes renamed is slower than growing the part again.
-  The layout takes its edits one at a time, and each walks the root's 300
-  kids: 300 edits, 0.3 ms each. That's the layout's cost, the same one a
-  keystroke in that list pays once, and it wants the layout to take
-  several kids' edits in one walk.
+- In one part, 300 nodes renamed costs what growing the part again
+  does. It was 88 ms while the layout took its edits one at a time, each
+  walking the root's 300 kids: a frame now takes a run of edits for each
+  of its kids in one walk (`Fit.Edit.each`), and `Tree.refresh` gives it
+  one. What's left is the lines: 300 splices, each made in a list of
+  3,300 lines by walking to its place. Every stage after the layout keeps
+  its lines that way, so many changes at once in one long part cost the
+  part's length each, whoever makes them. A part an entry doesn't pay it.
 - A cell nothing shows costs a walk of every node to find that out, 50 ns
   a node, and each part its own copy of the definitions brought up to
   date. As it is, a part keeps the cells it asked for, and looks there.

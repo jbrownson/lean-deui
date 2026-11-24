@@ -231,13 +231,52 @@ inductive Edit (S : Type) where
   | replace (f : Frame S)
   | kid (i : Nat) (e : Edit S)
   | reshape (doc : Doc S) (kids : List (Source S))
+  /-- Runs of edits, a run for each kid, in the kids' order: the kid at `j`
+  gets the run at `j`, and a kid past the last run none. It's what many
+  `kid` edits come to, and costs the frame one walk. -/
+  | each (runs : List (List (Edit S)))
 
+mutual
 def Edit.apply : Edit S → Frame S → Frame S
   | .replace f, _ => f
   | .kid i e, .node doc kids => .node doc (kids.modify i (Edit.apply e))
   | .reshape doc sources, .node _ kids => .node doc (sources.map (Source.frame kids))
+  | .each runs, .node doc kids => .node doc (Edit.applyEach runs kids)
+
+/-- A run of edits, applied in order. -/
+def Edit.applyRun : List (Edit S) → Frame S → Frame S
+  | [], f => f
+  | e :: es, f => Edit.applyRun es (Edit.apply e f)
+
+/-- Each kid with its run applied. -/
+def Edit.applyEach : List (List (Edit S)) → List (Frame S) → List (Frame S)
+  | es :: runs, k :: ks => Edit.applyRun es k :: Edit.applyEach runs ks
+  | _, ks => ks
+end
 
 abbrev edits (S : Type) : EditStructure := ⟨Frame S, Edit S, Edit.apply⟩
+
+theorem Edit.applyRun_eq : ∀ (es : List (Edit S)) (f : Frame S), Edit.applyRun es f = run (edits S) es f
+  | [], _ => rfl
+  | e :: es, f => by
+    rw [Edit.applyRun]
+    exact Edit.applyRun_eq es (Edit.apply e f)
+
+/-- The kid at `j` after each kid's run: the kid there with the run at
+`j`, if there is one. -/
+theorem Edit.applyEach_getElem? : ∀ (runs : List (List (Edit S))) (kids : List (Frame S)) (j : Nat),
+    (Edit.applyEach runs kids)[j]? = (kids[j]?).map fun fr =>
+      match runs[j]? with
+      | some es => run (edits S) es fr
+      | none => fr
+  | [], kids, j => by
+    simp only [Edit.applyEach, List.getElem?_nil]
+    cases kids[j]? <;> rfl
+  | es :: runs, [], j => by simp [Edit.applyEach]
+  | es :: runs, k :: ks, 0 => by simp [Edit.applyEach, Edit.applyRun_eq]
+  | es :: runs, k :: ks, j + 1 => by
+    simp only [Edit.applyEach, List.getElem?_cons_succ]
+    exact Edit.applyEach_getElem? runs ks j
 
 /-! ## Laying out, kid by kid -/
 
@@ -627,6 +666,17 @@ def readied [DecidableEq S] (relay : Kept S → List (Splice S) × Kept S) (i : 
       .kid j k made.2 made.1
     else .kid j k k []
 
+/-- A kept item made ready: a kid laid again by the way of laying again
+that's at its place, if there's one there; any other as it stands. -/
+def readiedEach (relays : Array (Kept S → List (Splice S) × Kept S)) : Item S → Ready S
+  | .token t => .token t
+  | .kid j k =>
+    match relays[j]? with
+    | some relay =>
+      let made := relay k
+      .kid j k made.2 made.1
+    | none => .kid j k k []
+
 /-- A kept item made ready, as it stands. -/
 def Item.ready : Item S → Ready S
   | .token t => .token t
@@ -646,6 +696,7 @@ def Source.origin (sources : Array (Source S)) (had : Nat) (i : Nat) : Option Na
   | some (.kept j) => if j < had then some j else none
   | _ => none
 
+mutual
 /-- A kept frame after an edit, and the splices that take its tokens
 there. A frame replaced is laid out from nothing, where it stood. A frame
 above it, or one reshaped, is walked again with its kids as they're kept;
@@ -660,6 +711,30 @@ def Kept.relay [DecidableEq S] (m : Measure S) (ribbon : Nat) : Edit S → Kept 
   | .reshape doc sources, .node (.node _ kids) first col items _ _ =>
     rewalk m ribbon doc (sources.map (Source.frame kids)) (Source.origin sources.toArray kids.length) first col
       (items.map Item.ready)
+  | .each runs, .node (.node doc kids) first col items _ _ =>
+    rewalk m ribbon doc (Edit.applyEach runs kids) some first col
+      (items.map (readiedEach (relayEach m ribbon runs).toArray))
+
+/-- A kept frame after a run of edits. -/
+def relays [DecidableEq S] (m : Measure S) (ribbon : Nat) : List (Edit S) → Kept S → List (Splice S) × Kept S
+  | [], k => ([], k)
+  | e :: es, k =>
+    let made := Kept.relay m ribbon e k
+    let rest := relays m ribbon es made.2
+    (made.1 ++ rest.1, rest.2)
+
+/-- The way to lay a kid again after its run, for each run. -/
+def relayEach [DecidableEq S] (m : Measure S) (ribbon : Nat) :
+    List (List (Edit S)) → List (Kept S → List (Splice S) × Kept S)
+  | [] => []
+  | es :: runs => relays m ribbon es :: relayEach m ribbon runs
+end
+
+theorem relayEach_eq [DecidableEq S] (m : Measure S) (ribbon : Nat) (runs : List (List (Edit S))) :
+    relayEach m ribbon runs = runs.map (relays m ribbon) := by
+  induction runs with
+  | nil => rfl
+  | cons es runs ih => simp [relayEach, ih]
 
 /-- A ready item is sound: its kid, as it's laid now, is the frame that
 kid is now (`was` says, by where the kid was) laid out from nothing where
@@ -907,6 +982,18 @@ theorem olds_readied [DecidableEq S] (relay : Kept S → List (Splice S) × Kept
     | token t => rfl
     | kid j k => by_cases hj : j = i <;> simp [readied, hj, Ready.old1, Item.tokens1]
 
+theorem olds_readiedEach (relays : Array (Kept S → List (Splice S) × Kept S)) (items : List (Item S)) :
+    olds (items.map (readiedEach relays)) = tokensOf items := by
+  rw [tokensOf_flatMap]
+  induction items with
+  | nil => rfl
+  | cons it is ih =>
+    simp only [olds, List.map_cons, List.flatMap_cons] at ih ⊢
+    rw [ih]
+    cases it with
+    | token t => rfl
+    | kid j k => cases h : relays[j]? <;> simp [readiedEach, h, Ready.old1, Item.tokens1]
+
 theorem olds_ready (items : List (Item S)) : olds (items.map Item.ready) = tokensOf items := by
   rw [tokensOf_flatMap]
   induction items with
@@ -946,6 +1033,7 @@ theorem rewalk_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) (doc : Doc S) (
   rw [← hitems]
   exact ht
 
+mutual
 /-- Laying out again is right: what's kept after an edit is the edited
 frame laid out from nothing, and the splices take the tokens there,
 wherever they sit. -/
@@ -1020,6 +1108,63 @@ theorem Kept.relay_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (e : 
       (Source.origin sources.toArray kids.length) (fun j => kids[j]?) horigin f c _ hready
     rw [olds_ready] at h
     exact h
+  | .each runs, .node doc kids, f, c => by
+    rw [Frame.lay_node, Kept.tokens_node]
+    simp only [Edit.apply, Kept.relay]
+    -- The kept items, ready for the kids as they are now.
+    have hready : ∀ r ∈ (Doc.lay m ribbon (kidFits m.width kids) (kidLay m ribbon kids) doc c f ()).items.map
+        (readiedEach (relayEach m ribbon runs).toArray),
+        r.Sound m ribbon (fun j => (Edit.applyEach runs kids)[j]?) := by
+      intro r hr
+      obtain ⟨it, hit, rfl⟩ := List.mem_map.mp hr
+      cases it with
+      | token t => exact True.intro
+      | kid j k =>
+        obtain ⟨f', c', u, hs⟩ := Doc.lay_kids m ribbon _ _ doc c f () j k hit
+        obtain ⟨frj, hfr, hkk⟩ := kidLay_some m ribbon kids j f' c' u k hs
+        have hext : k.extent = Text.extent k.tokens := by rw [hkk, Frame.lay_extent]
+        have hat : (relayEach m ribbon runs).toArray[j]? = (runs[j]?).map (relays m ribbon) := by
+          rw [relayEach_eq, List.getElem?_toArray, List.getElem?_map]
+        cases hes : runs[j]? with
+        | none =>
+          simp only [readiedEach, hat, hes, Option.map_none]
+          refine ⟨frj, ?_, hkk, Takes.none _, hext⟩
+          simp [Edit.applyEach_getElem?, hfr, hes]
+        | some es =>
+          have ih := relayEach_ok m ribbon runs j es hes frj k.first k.col
+          rw [← hkk] at ih
+          simp only [readiedEach, hat, hes, Option.map_some]
+          exact ⟨run (edits S) es frj, by simp [Edit.applyEach_getElem?, hfr, hes], ih.1,
+            by rw [ih.1]; exact ih.2, hext⟩
+    have h := rewalk_ok m ribbon doc (Edit.applyEach runs kids) some
+      (fun j => (Edit.applyEach runs kids)[j]?) (fun a b hab => by cases hab; rfl) f c _ hready
+    rw [olds_readiedEach] at h
+    exact h
+
+/-- A run of edits laid out again is right, edit after edit. -/
+theorem relays_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (es : List (Edit S)) (fr : Frame S) (f c : Nat),
+    (relays m ribbon es (Frame.lay m ribbon fr f c)).2 = Frame.lay m ribbon (run (edits S) es fr) f c ∧
+      Takes (relays m ribbon es (Frame.lay m ribbon fr f c)).1 (Frame.lay m ribbon fr f c).tokens
+        (Frame.lay m ribbon (run (edits S) es fr) f c).tokens
+  | [], _, _, _ => ⟨rfl, Takes.none _⟩
+  | e :: es, fr, f, c => by
+    obtain ⟨h1, h2⟩ := Kept.relay_ok m ribbon e fr f c
+    simp only [relays, h1]
+    obtain ⟨r1, r2⟩ := relays_ok m ribbon es (Edit.apply e fr) f c
+    exact ⟨r1, Takes.then_ _ _ _ _ _ h2 r2⟩
+
+/-- And so is each run of a list of them. -/
+theorem relayEach_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (runs : List (List (Edit S))) (j : Nat)
+    (es : List (Edit S)), runs[j]? = some es → ∀ (fr : Frame S) (f c : Nat),
+    (relays m ribbon es (Frame.lay m ribbon fr f c)).2 = Frame.lay m ribbon (run (edits S) es fr) f c ∧
+      Takes (relays m ribbon es (Frame.lay m ribbon fr f c)).1 (Frame.lay m ribbon fr f c).tokens
+        (Frame.lay m ribbon (run (edits S) es fr) f c).tokens
+  | [], _, _, h, _, _, _ => by simp at h
+  | es0 :: _, 0, es, h, fr, f, c => by
+    have e : es0 = es := by simpa using h
+    exact e ▸ relays_ok m ribbon es0 fr f c
+  | _ :: runs, j + 1, es, h, fr, f, c => relayEach_ok m ribbon runs j es (by simpa using h) fr f c
+end
 
 /-! ## Edits of kids -/
 
@@ -1057,25 +1202,6 @@ theorem run_kids {α : Type} (doc : Doc S) (old new : α → Frame S) (es : α �
     exact ih
 
 /-! ## Fitting, as an incremental function -/
-
-/-- A kept frame after a run of edits. -/
-def relays [DecidableEq S] (m : Measure S) (ribbon : Nat) : List (Edit S) → Kept S → List (Splice S) × Kept S
-  | [], k => ([], k)
-  | e :: es, k =>
-    let made := Kept.relay m ribbon e k
-    let rest := relays m ribbon es made.2
-    (made.1 ++ rest.1, rest.2)
-
-theorem relays_ok [DecidableEq S] (m : Measure S) (ribbon : Nat) : ∀ (es : List (Edit S)) (fr : Frame S) (f c : Nat),
-    (relays m ribbon es (Frame.lay m ribbon fr f c)).2 = Frame.lay m ribbon (run (edits S) es fr) f c ∧
-      Takes (relays m ribbon es (Frame.lay m ribbon fr f c)).1 (Frame.lay m ribbon fr f c).tokens
-        (Frame.lay m ribbon (run (edits S) es fr) f c).tokens
-  | [], _, _, _ => ⟨rfl, Takes.none _⟩
-  | e :: es, fr, f, c => by
-    obtain ⟨h1, h2⟩ := Kept.relay_ok m ribbon e fr f c
-    simp only [relays, h1]
-    obtain ⟨r1, r2⟩ := relays_ok m ribbon es (Edit.apply e fr) f c
-    exact ⟨r1, Takes.then_ _ _ _ _ _ h2 r2⟩
 
 /-- Fitting's derivative: the same ribbon lays out again what the edits
 reach; a new one lays everything out. -/

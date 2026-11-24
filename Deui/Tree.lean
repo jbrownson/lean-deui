@@ -157,16 +157,23 @@ theorem framed_ok (own : L → Fit.Doc S) : (framed own).ok := fun t e => Edit.f
 /-! ## A new context -/
 
 mutual
-/-- The edits that draw again each node that's stale, its kids kept. A
-subtree with nothing stale gives none. -/
+/-- The edits that draw again each node that's stale, its kids kept: the
+node's own, then its kids' runs as one edit, so the layout walks each
+frame once however many of its kids changed. A subtree with nothing stale
+gives none. -/
 def refresh (own : L → Fit.Doc S) (stale : L → Bool) : Tree L → List (Fit.Edit S)
   | .node l kids =>
-    let below := refreshKids own stale kids 0
+    let runs := refreshKids own stale kids
+    let below := if runs.isEmpty then [] else [Fit.Edit.each runs]
     if stale l then .reshape (own l) ((List.range kids.length).map .kept) :: below else below
 
-def refreshKids (own : L → Fit.Doc S) (stale : L → Bool) : List (Tree L) → Nat → List (Fit.Edit S)
-  | [], _ => []
-  | k :: ks, i => (refresh own stale k).map (.kid i) ++ refreshKids own stale ks (i + 1)
+/-- Each kid's run, as far as the last kid that has one. -/
+def refreshKids (own : L → Fit.Doc S) (stale : L → Bool) : List (Tree L) → List (List (Fit.Edit S))
+  | [] => []
+  | k :: ks =>
+    let run := refresh own stale k
+    let rest := refreshKids own stale ks
+    if run.isEmpty && rest.isEmpty then [] else run :: rest
 end
 
 theorem kept_all {α : Type} (d : α) (xs : List α) :
@@ -177,19 +184,38 @@ theorem kept_all {α : Type} (d : α) (xs : List α) :
     simp at h1
     simp [h1]
 
+theorem applyEach_nil (ks : List (Fit.Frame S)) : Fit.Edit.applyEach [] ks = ks := by
+  cases ks <;> rfl
+
 mutual
 /-- Drawing the stale nodes again takes the frames to the ones the new way
 of drawing gives, if every node that isn't stale is drawn the same by it. -/
 theorem refresh_ok (own own' : L → Fit.Doc S) (stale : L → Bool) (h : ∀ l, stale l = false → own' l = own l) :
     ∀ t : Tree L, run (Fit.edits S) (refresh own' stale t) (frame own t) = frame own' t
   | .node l kids => by
-    have below := refreshKids_ok own own' stale h kids [] (own' l)
-    simp only [List.length_nil, List.nil_append] at below
+    have below := refreshKids_ok own own' stale h kids
+    -- The kids' runs, on a node with any doc.
+    have deep : ∀ doc : Fit.Doc S,
+        run (Fit.edits S) (if (refreshKids own' stale kids).isEmpty then []
+          else [Fit.Edit.each (refreshKids own' stale kids)]) (.node doc (frames own kids)) =
+          .node doc (frames own' kids) := by
+      intro doc
+      cases hr : (refreshKids own' stale kids).isEmpty with
+      | true =>
+        have none_ : refreshKids own' stale kids = [] := by simpa using hr
+        rw [none_, applyEach_nil] at below
+        simp only [ite_true]
+        show Fit.Frame.node doc (frames own kids) = _
+        rw [below]
+      | false =>
+        simp only [Bool.false_eq_true, ite_false]
+        show Fit.Edit.apply (.each (refreshKids own' stale kids)) (.node doc (frames own kids)) = _
+        simp only [Fit.Edit.apply, below]
     simp only [refresh, frame]
     cases hs : stale l with
     | true =>
       simp only [ite_true]
-      show run (Fit.edits S) (refreshKids own' stale kids 0)
+      show run (Fit.edits S) _
         (Fit.Edit.apply (.reshape (own' l) ((List.range kids.length).map .kept)) (.node (own l) (frames own kids))) = _
       have all : ((List.range kids.length).map Fit.Source.kept).map (Fit.Source.frame (frames own kids)) =
           frames own kids := by
@@ -198,24 +224,30 @@ theorem refresh_ok (own own' : L → Fit.Doc S) (stale : L → Bool) (h : ∀ l,
         rw [frames_eq, List.map_map]
         exact this
       simp only [Fit.Edit.apply, all]
-      exact below
+      exact deep (own' l)
     | false =>
       simp only [Bool.false_eq_true, ite_false]
       rw [← h l hs]
-      exact below
+      exact deep (own' l)
 
 theorem refreshKids_ok (own own' : L → Fit.Doc S) (stale : L → Bool) (h : ∀ l, stale l = false → own' l = own l) :
-    ∀ (ks : List (Tree L)) (pre : List (Fit.Frame S)) (doc : Fit.Doc S),
-      run (Fit.edits S) (refreshKids own' stale ks pre.length) (.node doc (pre ++ frames own ks)) =
-        .node doc (pre ++ frames own' ks)
-  | [], _, _ => rfl
-  | k :: ks, pre, doc => by
+    ∀ ks : List (Tree L), Fit.Edit.applyEach (refreshKids own' stale ks) (frames own ks) = frames own' ks
+  | [] => rfl
+  | k :: ks => by
+    have first := refresh_ok own own' stale h k
+    have rest := refreshKids_ok own own' stale h ks
     simp only [refreshKids, frames]
-    rw [run_append, Fit.run_kid, refresh_ok own own' stale h k]
-    have rest := refreshKids_ok own own' stale h ks (pre ++ [frame own' k]) doc
-    simp only [List.length_append, List.length_cons, List.length_nil, Nat.zero_add, List.append_assoc,
-      List.cons_append, List.nil_append] at rest
-    exact rest
+    cases hn : ((refresh own' stale k).isEmpty && (refreshKids own' stale ks).isEmpty) with
+    | true =>
+      obtain ⟨h1, h2⟩ : refresh own' stale k = [] ∧ refreshKids own' stale ks = [] := by simpa using hn
+      rw [h1] at first
+      rw [h2, applyEach_nil] at rest
+      simp only [ite_true, applyEach_nil]
+      rw [← rest]
+      exact congrArg (· :: frames own ks) first
+    | false =>
+      simp only [Bool.false_eq_true, ite_false, Fit.Edit.applyEach, Fit.Edit.applyRun_eq]
+      rw [first, rest]
 end
 
 /-! ## Under a context -/

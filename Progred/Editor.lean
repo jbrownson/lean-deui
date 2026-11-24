@@ -380,15 +380,15 @@ theorem drawn_ok : drawn.ok := fun a d => drawn_df_ok a.1.1 d.1.1 a.1.2 d.1.2 a.
 
 /-- A part: its frames, laid out within the ribbon, as lines. -/
 def part : Cached (prod Under Entries.Parts) PartLines :=
-  compose drawn (compose (Fit.fit measure) (cached (lift Text.rows)))
+  compose drawn (compose (Fit.fit measure) (Cached.lift (cached Text.rows)))
 
 theorem part_ok : part.ok :=
-  compose_ok _ _ drawn_ok (compose_ok _ _ (Fit.fit_ok measure) (cached_ok _ (lift_ok _ Text.rows_ok)))
+  compose_ok _ _ drawn_ok (compose_ok _ _ (Fit.fit_ok measure) (Cached.lift_ok _ (cached_ok _ Text.rows_ok)))
 
 /-- What a part gives from nothing is its lines. -/
 theorem part_lines (seen : Display.Seen) (cells : Cells) (entry : Display.Entry) :
     (part.f ((seen, cells), entry)).1 = Display.part (Display.input seen (Display.item (look cells) entry)) := by
-  simp only [part, compose, drawn, drawn.f, Fit.fit, cached, lift, Text.rows, Display.part, id]
+  simp only [part, compose, drawn, drawn.f, Fit.fit, cached, Cached.lift, Text.rows, Display.part, id]
   with_reducible_and_instances rfl
 
 /-! ### The parts -/

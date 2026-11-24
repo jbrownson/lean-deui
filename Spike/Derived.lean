@@ -657,12 +657,12 @@ theorem framed_ok : framed.ok :=
 
 /-- A value's lines. -/
 def lines : Cached (prod Under (runs Writes)) Editor.PartLines :=
-  compose framed (compose (Fit.fit measure) (cached (lift Text.rows)))
+  compose framed (compose (Fit.fit measure) (Cached.lift (cached Text.rows)))
 
 /-- The lines' derivative is right: its edits take the lines to those of
 the value after its writes, under the definitions after theirs. -/
 theorem lines_ok : lines.ok :=
-  compose_ok _ _ framed_ok (compose_ok _ _ (Fit.fit_ok measure) (cached_ok _ (lift_ok _ Text.rows_ok)))
+  compose_ok _ _ framed_ok (compose_ok _ _ (Fit.fit_ok measure) (Cached.lift_ok _ (cached_ok _ Text.rows_ok)))
 
 /-- info: 'Progred.Derived.lines_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in

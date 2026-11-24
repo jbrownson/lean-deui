@@ -74,9 +74,10 @@ module does.
   started and each kid as it was laid there. When a frame is replaced,
   only the frames above it are walked again, each taking its other kids as
   they stand. A frame can also be reshaped: given a new doc, and kids that
-  are each one it had or a new one. What comes out is a splice of the
-  text between what a frame's walk has in common with what was kept, at
-  the front and at the end.
+  are each one it had or a new one; or given a run of edits for each of
+  its kids, and walked once for all of them. What comes out is a splice
+  of the text between what a frame's walk has in common with what was
+  kept, at the front and at the end.
   `fit_ok` says the splices take the text to the edited tree's, and that
   what's kept is what laying that out from nothing keeps.
 - `Tree.lean`: a tree drawn node by node, as frames for `Fit.lean`: each
