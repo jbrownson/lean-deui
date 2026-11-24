@@ -1,5 +1,5 @@
 import Deui.Combine
-import Deui.Flatten
+import Deui.Spans
 
 /-!
 A list mapped under a context by a function that keeps what it needs: each

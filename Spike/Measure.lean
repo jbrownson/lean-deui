@@ -38,6 +38,13 @@ def notebook (n : Nat) : Document :=
   { root := some (Value.ofKind Kinds.notebook [(Kinds.entries, .list ((Position.spread n).zip ((List.range n).map entry)))]),
     cells := (List.range 10).foldl (fun cells k => cells.insert shared[k]! (sharedValue k 0)) {} }
 
+/-- The same entries as a list at the root, which is one part. -/
+def single (n : Nat) : Document :=
+  let d := notebook n
+  { d with root := match d.root.bind (·.field? Kinds.entries) with
+      | some entries => some entries
+      | none => d.root }
+
 /-- The time edits take, each run of them: in microseconds. -/
 def timedEdits (name : String) (m : M) (runs : List (List Model.Edit)) : IO M := do
   let t0 ← IO.monoNanosNow
@@ -55,9 +62,9 @@ def timedEdits (name : String) (m : M) (runs : List (List Model.Edit)) : IO M :=
 event, with what the view keeps. Files, or with a number, a notebook of
 that many entries. -/
 def main (args : List String) : IO Unit := do
-  for path in args do
+  for path in args.filter fun a => a.toNat?.isSome || a.endsWith ".gid" do
     let parsed ← match path.toNat? with
-      | some n => pure (.ok (notebook n))
+      | some n => pure (.ok (if args.contains "one" then single n else notebook n))
       | none => do GidText.parse (← IO.FS.readFile path)
     match parsed with
     | .error e => IO.println s!"{path}: {e}"
@@ -92,6 +99,9 @@ def main (args : List String) : IO Unit := do
         return
       let m ← timed "a function added" m [key 13, .text "l", .text "a", .text "m", key 13]
       let m ← timed "typing in its definition" m ("named".toList.map fun c => App.Event.text c.toString)
+      if args.contains "line" then
+        let _ ← timed "typing in a line, 600 times" m ((List.replicate 300 (App.Event.text "x")) ++ List.replicate 300 (key 127))
+        return
       let m ← if path.toNat?.isSome then do
           let m ← timedEdits "a definition a tenth of the entries reach, written" m
             ((List.range 20).map fun j => [Model.Edit.change (.cell shared[3]! (some (sharedValue 3 (j + 1))))])

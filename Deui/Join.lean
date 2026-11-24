@@ -1,4 +1,4 @@
-import Deui.Flatten
+import Deui.Spans
 
 /-!
 A list of lists, joined, where each list is edited as a list: an edit
@@ -15,18 +15,24 @@ section
 variable (cb : EditStructure)
 
 /-- One edit of a list among those joined, as an edit of the joined list:
-its position moved past the `off` elements before the list. A position past
-the list's end is where the edit itself would put it: an insert at the end,
-a delete or an update nowhere. -/
-def join.inner (off : Nat) (xs : List cb.Value) : Edit.of cb → List (Edit.of cb)
-  | .insert j x => [.insert (off + min j xs.length) x]
-  | .delete j => if j < xs.length then [.delete (off + j)] else []
-  | .update j d => if j < xs.length then [.update (off + j) d] else []
+its position moved past the `off` elements before the list, which is `n`
+long. A position past the list's end is where the edit itself would put it:
+an insert at the end, a delete or an update nowhere. -/
+def join.inner (off n : Nat) : Edit.of cb → List (Edit.of cb)
+  | .insert j x => [.insert (off + min j n) x]
+  | .delete j => if j < n then [.delete (off + j)] else []
+  | .update j d => if j < n then [.update (off + j) d] else []
 
-/-- A run of edits of one list, each from the list before it. -/
-def join.inners (off : Nat) : List (Edit.of cb) → List cb.Value → List (Edit.of cb)
+/-- How long a list of `n` is after an edit. -/
+def join.after (n : Nat) : Edit.of cb → Nat
+  | .insert _ _ => n + 1
+  | .delete j => if j < n then n - 1 else n
+  | .update _ _ => n
+
+/-- A run of edits of one list, `n` long before them. -/
+def join.inners (off : Nat) : List (Edit.of cb) → Nat → List (Edit.of cb)
   | [], _ => []
-  | e :: es, xs => join.inner cb off xs e ++ join.inners off es (edit cb e xs)
+  | e :: es, n => join.inner cb off n e ++ join.inners off es (join.after cb n e)
 
 /-- How many joined elements come before the list at `i`. -/
 def join.offset (xss : List (List cb.Value)) (i : Nat) : Nat := ((xss.take i).map List.length).sum
@@ -41,7 +47,7 @@ def join.edit (xss : List (List cb.Value)) : Edit.of (runs (editStructure cb)) �
   | .update i es =>
     match xss[i]? with
     | .none => []
-    | .some xs => join.inners cb (join.offset cb xss i) es xs
+    | .some xs => join.inners cb (join.offset cb xss i) es xs.length
 
 def join.one : Inc (editStructure (runs (editStructure cb))) (runs (editStructure cb)) :=
   ⟨fun xss => xss.flatMap id, join.edit cb⟩
@@ -69,8 +75,44 @@ theorem insert_min {A : Type} (xs : List A) (j : Nat) (x : A) : insert xs (min j
   · rw [Nat.min_eq_left h]
   · rw [Nat.min_eq_right h, insert_past xs j x h]
 
+theorem length_insert_any {A : Type} (xs : List A) (j : Nat) (x : A) : (insert xs j x).length = xs.length + 1 := by
+  induction xs generalizing j with
+  | nil => rfl
+  | cons y ys ih => cases j <;> simp [insert, ih]
+
+theorem length_remove {A : Type} (xs : List A) (j : Nat) (h : j < xs.length) :
+    (remove xs j).length = xs.length - 1 := by
+  induction xs generalizing j with
+  | nil => simp at h
+  | cons y ys ih =>
+    cases j with
+    | zero => simp [remove]
+    | succ j =>
+      have := ih j (by simpa using h)
+      simp only [remove, List.length_cons, this]
+      have : 0 < ys.length := by simp at h; omega
+      omega
+
+theorem length_update (xs : List cb.Value) (j : Nat) (d : cb.Edit) : (update cb xs j d).length = xs.length := by
+  induction xs generalizing j with
+  | nil => rfl
+  | cons y ys ih => cases j <;> simp [update, ih]
+
+/-- How long a list is after an edit. -/
+theorem length_edit (xs : List cb.Value) (e : Edit.of cb) : (edit cb e xs).length = join.after cb xs.length e := by
+  cases e with
+  | insert j x => exact length_insert_any xs j x
+  | delete j =>
+    by_cases h : j < xs.length
+    · simp only [join.after, h, ite_true]
+      exact length_remove xs j h
+    · simp only [join.after, h, ite_false]
+      show (remove xs j).length = _
+      rw [Scrolled.remove_past xs j (by omega)]
+  | update j d => exact length_update cb xs j d
+
 theorem join_inner_ok (pre xs suf : List cb.Value) (e : Edit.of cb) :
-    patch cb (join.inner cb pre.length xs e) (pre ++ (xs ++ suf)) = pre ++ (edit cb e xs ++ suf) := by
+    patch cb (join.inner cb pre.length xs.length e) (pre ++ (xs ++ suf)) = pre ++ (edit cb e xs ++ suf) := by
   cases e with
   | insert j x =>
     show insert (pre ++ (xs ++ suf)) (pre.length + min j xs.length) x = pre ++ (insert xs j x ++ suf)
@@ -93,13 +135,13 @@ theorem join_inner_ok (pre xs suf : List cb.Value) (e : Edit.of cb) :
       rw [update_past xs j (by omega)]
 
 theorem join_inners_ok (pre suf : List cb.Value) (es : List (Edit.of cb)) (xs : List cb.Value) :
-    patch cb (join.inners cb pre.length es xs) (pre ++ (xs ++ suf)) = pre ++ (patch cb es xs ++ suf) := by
+    patch cb (join.inners cb pre.length es xs.length) (pre ++ (xs ++ suf)) = pre ++ (patch cb es xs ++ suf) := by
   induction es generalizing xs with
   | nil => rfl
   | cons e es ih =>
-    show run (editStructure cb) (join.inner cb pre.length xs e ++ join.inners cb pre.length es (edit cb e xs))
-      (pre ++ (xs ++ suf)) = _
-    rw [run_append]
+    show run (editStructure cb) (join.inner cb pre.length xs.length e ++
+      join.inners cb pre.length es (join.after cb xs.length e)) (pre ++ (xs ++ suf)) = _
+    rw [run_append, ← length_edit]
     have h := join_inner_ok cb pre xs suf e
     exact (congrArg (patch cb _) h).trans (ih (edit cb e xs))
 

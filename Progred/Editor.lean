@@ -456,37 +456,55 @@ theorem visible_ok (height : Nat) : (visible height).ok :=
 /-- The lines' text, each a row of the scene. -/
 def textLayer : Cached Visible (runs sceneEdits) := cached (Inc.onSecond (Drawing.inc rowScene))
 
+/-- The lines' washes for a selection, under their text; with nothing
+selected, nothing. -/
+def washes (p : Paint) : Cached Visible (runs sceneEdits) :=
+  if p.selection.isNone && p.marked.isNone then still (.group 0 0 [])
+  else cached (Inc.onSecond (Drawing.inc (washScene p)))
+
+theorem washes_ok (p : Paint) : (washes p).ok := by
+  unfold washes
+  split
+  · exact still_ok _
+  · exact cached_ok _ (Inc.onSecond_ok _ (Drawing.inc_ok (washScene p)))
+
 /-- The lines' washes, under their text: drawn again when the selection
 moves, and else following the lines as the text does. -/
 def washLayer : Cached Visible (runs sceneEdits) :=
-  keyed (fun (a : Model × List (Placed Line)) => paint a.1)
-    (fun p => cached (Inc.onSecond (Drawing.inc (washScene p))))
+  keyed (fun (a : Model × List (Placed Line)) => paint a.1) washes
 
-/-- How many parts an edit lays out again before the window's lines are
-worked out afresh, not edit by edit: an edit that large costs more that way. -/
-def manyParts : Nat := 8
+/-- How many lines an edit changes before the window's lines are worked
+out afresh, not edit by edit: an edit that large costs more that way. -/
+def manyLines : Nat := 64
+
+/-- How many lines an edit of the parts changes. -/
+def changed : List (Lists.Edit.of PartLines) → Nat
+  | [] => 0
+  | .update _ es :: rest => es.length + changed rest
+  | .insert _ lines :: rest => lines.length + changed rest
+  | .delete _ :: rest => manyLines + changed rest
 
 /-- The window's lines, whatever its height: a new height shows them anew,
-and so does an edit of many parts at once. -/
+and so does an edit of many lines at once. -/
 def rowsLayer : Cached Laid (runs sceneEdits) :=
   keyed (fun (a : Model × List (List Line)) => a.1.height)
     (fun height => compose lines (compose (visible height) (layers washLayer textLayer)))
-    (fun _ (d : Model × List (Lists.Edit.of PartLines)) => decide (d.2.length > manyParts))
+    (fun _ (d : Model × List (Lists.Edit.of PartLines)) => decide (changed d.2 > manyLines))
 
 theorem rowsLayer_ok : rowsLayer.ok :=
   keyed_ok _ _ _ fun height =>
     compose_ok _ _ lines_ok
       (compose_ok _ _ (visible_ok height)
-        (layers_ok _ _ (keyed_ok _ _ _ fun p => cached_ok _ (Inc.onSecond_ok _ (Drawing.inc_ok (washScene p))))
+        (layers_ok _ _ (keyed_ok _ _ _ washes_ok)
           (cached_ok _ (Inc.onSecond_ok _ (Drawing.inc_ok rowScene)))))
 
-/-- Where the caret is: its line and column. -/
+/-- Where the caret is: its line and column. It's on the line the
+selection starts on. -/
 def caretAt (m : Model) (l : Model.Layout) : Option (Nat × Nat) :=
-  m.selection.bind fun sel =>
-    (m.partOf sel).bind fun b =>
-      (l.parts[b]?).bind fun lines =>
-        lines.zipIdx.findSome? fun (line, i) =>
-          (line.placed.find? (·.2.face == .caret)).map fun p => (l.lineOf b + i, p.1)
+  (l.here m).bind fun (b, here) =>
+    (l.parts[b]?).bind fun lines =>
+      (lines[here.line]?).bind fun line =>
+        (line.placed.find? (·.2.face == .caret)).map fun p => (l.lineOf b + here.line, p.1)
 
 /-- The card of offers, under the caret: up to 8, the chosen one marked. -/
 def offersCard (m : Model) (l : Model.Layout) : List Scene :=

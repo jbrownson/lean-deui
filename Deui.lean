@@ -8,8 +8,6 @@ import Deui.Drawn
 import Deui.Redraw
 import Deui.Spans
 import Deui.Combine
-import Deui.Sift
-import Deui.Flatten
 import Deui.Anchored
 import Deui.Text
 import Deui.Fit

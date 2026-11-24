@@ -24,9 +24,7 @@ def show_ (m : M) : IO Unit := do
   if !model.log.isEmpty then IO.println "  !! changes noted that no edit said"
   match model.selection with
   | some sel =>
-    let at_ := (l.here model).map fun (b, i) =>
-      let stop := (Model.stops l.parts[b]!)[i]!
-      s!"line {l.lineOf b + stop.line} col {stop.col}"
+    let at_ := (l.here model).map fun (b, here) => s!"line {l.lineOf b + here.line} col {here.col}"
     let typing := sel.editing.map fun e => s!" typing \"{e.text}\"{if e.picker then " (query)" else ""}"
     IO.println s!"  selection: {repr sel.stage} at {at_.getD "?"}{typing.getD ""}"
     let offers := Model.offers model

@@ -188,34 +188,61 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   `Model.write` takes the path a document was written at and works out which
   change that is.
 - **The view is a derivative, and each step is sensitive to what it reads**
-  (`Progred/Editor.lean`). The model's edits are sorted by what they're asked
-  of: the definitions written, and the document's parts, where an entry
-  written is its part replaced and one added or taken away is a part inserted
-  or deleted (`Progred/Entries.lean`, `edits_ok`). Each part becomes an item:
-  what it reaches, its evaluations, and every cell it asked for on the way,
-  defined or not. An edit that writes a definition is asked of each item, and
-  only one that asked for that cell is worked out again: `reach_agree` says
-  two tables of definitions that agree on the cells asked for give the same,
-  and `defined_other` that writing one definition leaves the others. Each item
-  becomes a part's input: the item, and what of the editor's state it's drawn
-  with, restricted to it. A change of that is asked of each part, and only one
-  whose restriction differs gets a new input, so a selection that moves touches
-  the parts it leaves and enters. A part is laid out where its input changed,
-  and its lines replace the ones it had; the window shows the lines that fit;
-  and each is a row of the scene. Every step is one of deui's, proved, and
-  `view_ok` is their laws composed.
+  (`Progred/Editor.lean`). The model's edits are sorted by what they're
+  asked of: the definitions written, what of the editor's state is drawn,
+  and the document's parts, where an entry written within is its part
+  written at that path, and one added or taken away is a part inserted or
+  deleted (`Progred/Entries.lean`, `edits_ok`). Each part keeps its own, and
+  is given every edit of what it's drawn under, of which it makes what it's
+  sensitive to (`Deui/Under.lean`). It keeps what it reaches, with every
+  cell it asked for on the way, defined or not: a definition written grows
+  the part again only if it asked for that cell (`reach_agree`,
+  `item_untouched`). It keeps its frames, and how they're laid out; its
+  lines are edited line by line, joined with the other parts', the window
+  shows the lines that fit, and each is a row of the scene. Every step is
+  one of deui's, proved, and `view_ok` is their laws composed.
+- **A value is a frame, and a frame is drawn from little.** The projection
+  draws each value as one frame, with the values inside it as its kids
+  (`Progred/Display.lean`). A frame is drawn from its value without what's
+  inside its elements and fields, the definitions it looks up, and the
+  selection only when it's at the frame or a step in, with what's typed
+  only where it's typed. So two changes can be followed down a part's
+  frames to where they land, each frame on the way asked only whether what
+  it sees is as it was (`Progred/Regrow.lean`): a selection that changes
+  (`reselect_ok`), and a write within a value (`rewrite_ok`). A frame that
+  sees the same is left, with every kid the change isn't on the way to;
+  one that sees something new is grown again with all under it. Typing
+  grows one frame again. A form that would read further into its value
+  makes that a kid instead: a record's name, a lambda's parameters, a
+  notebook's entries.
+- **Layout is a derivative** (`Deui/Fit.lean`). A part's frames are laid
+  out as text within the ribbon, and kept as they're laid: each frame with
+  where it started, and each kid as it was laid there. A frame grown again
+  is laid out where it stood; the frames above it are each walked once,
+  taking their other kids as they stand, and if a frame comes out as it
+  was but for the kid that changed, the kid's splice of the text is all
+  there is. Where a frame now fits differently (it was on one line and
+  isn't), that frame's text is replaced. A splice becomes edits of the
+  lines it reaches.
+- **A selection that rests is a wash, not a layout.** Only a selection
+  being typed in, or one with a hole or a label drawn for it, is part of
+  what a part is drawn with. One that rests on a value is washed under the
+  text of the lines that show, a layer of its own, with the mark on the
+  other places the selected cell is: an arrow key lays nothing out, and
+  draws the wash of the window's lines again.
 - **A part takes nothing from the parts beside it.** An entry being added is
   anchored to the entry it's before, or to the entries' end, and that part
   draws it. The place to add an entry is before each entry and at the end, and
   its position is worked out when it's chosen, from the document. Entries have
   no numbers: a number is the one thing every later entry would take from an
   entry added before it.
-- **Handlers read what the view keeps.** Navigation and clicks use the layout
-  the view kept for the model (`laidOf_view`), and where an edit needs the
-  layout of a model it's passing through, the same derivative gives it, of the
-  model its edits so far make (`relaid_view`). Scrolling to the selection
-  follows an event's edits as `settle`, since it needs the layout of the new
-  model.
+- **Handlers read what the view keeps.** Navigation and clicks use the lines
+  the view kept for the model (`laidOf_view`), whose spans carry the
+  occurrences they show: an arrow key reads on from where the selection
+  starts until it finds the next. Where an edit needs the layout of a model
+  it's passing through, the same derivative gives it, of the model its
+  edits so far make (`relaid_view`). Scrolling to the selection follows an
+  event's edits as `settle`, since it needs the layout of the new model.
 - **Outside the pure update:** fresh cell ids, evaluations, the clipboard and
   saving are done by the window's loop after each batch of events and come
   back as edits (`Progred/Outside.lean`); an evaluation is remembered by the
@@ -266,11 +293,15 @@ the window was driven under Xvfb):
 - Projections defined in the document: a def's `projection` as a layout, and
   as a function of the record (`examples/projections.gid`), their parts edited
   in place.
-- The view by derivative. `progred_measure`, on a notebook of 3,300 lines in
-  300 entries, a tenth of which reach each of ten definitions: the wheel about
-  12 µs, a keystroke 0.5 ms, an arrow key up to 0.8 ms, a definition written
-  2 ms, against 16 ms to lay it out from nothing. At 33,000 lines in 3,000
-  entries: 0.07 ms, 3 ms, 11 ms and 61 ms, against 174 ms.
+- The view by derivative, down to a part's frames. `progred_measure`, on a
+  notebook of 3,300 lines in 300 entries, a tenth of which reach each of
+  ten definitions: the wheel about 25 µs, an arrow key 50 µs, a keystroke
+  0.2 to 0.35 ms, a definition written 4 ms, against 20 ms to lay it out
+  from nothing. On the same entries as one part, a list of 300 records at
+  the root (`progred_measure 300 one`): an arrow key 50 µs, a keystroke 0.5
+  to 0.65 ms, an element added to the root list 3 ms. Before a part's
+  layout had a derivative, a keystroke or an arrow key there took a third
+  of a second.
 
 Not here yet:
 
@@ -285,22 +316,42 @@ Not here yet:
 - Proportional text and delimiters that span their block.
 - New and Open; a mark that the document has unsaved changes.
 - CAM, Fidget, the web and macOS targets.
-- What the view still does in proportion to the document. Its lists are
-  linked lists, so an edit at a position costs the position: patching each
-  step's list, counting the rows above the window. That's the few milliseconds
-  a keystroke takes among 3,000 entries, and it's why an edit that lays out
-  more than one part draws the window's lines afresh. A sequence held as a
-  tree would make these the logarithm. A part is laid out whole when anything
-  it reads changes, and all its lines are new: an entry that reaches a
-  definition is laid out again when it's written, though it may show only its
-  name; and a root that isn't a notebook is one part (the Rust version's own
-  example files, whose roots are its panes, are like that here). A derivative
-  of a part's layout, reading by the cell as items do, is the way on from
-  here. A function projection's results go to every part that has such a kind.
-- Where a part is still asked by comparing: a change of the selection, the
-  folds or what Lean gave is asked of each part by whether what the part
-  takes of it differs, not by a rule read off the change. It's a small value
-  compared once a part; a rule for each kind of change would do without.
+- What the view still does in proportion to more than the change:
+  - Its lists are linked lists, so an edit at a position costs the
+    position: patching a list of lines, counting the rows above the window,
+    finding a kid among a frame's kids. A frame on the way to a change is
+    drawn again to find its kids, and walked again to lay them out, so it
+    costs its width: a list of 300 at the root is most of the half
+    millisecond a keystroke takes in one large part. A sequence held as a
+    tree would make these the logarithm.
+  - A change to what a list or a record holds grows that frame again with
+    all under it: an element added, a field given a value, a hole opened or
+    closed. So does a write within an evaluation, or within a record drawn
+    by a projection, since those read their whole value. Adding an element
+    to a list that is the whole document grows everything again. Frames
+    whose kids are edited as a list are the way on.
+  - A write still walks its part once to find what it reaches, and a
+    definition written grows again every part that asked for the cell,
+    whole, though it may show only the name. Frames that say what they read,
+    cell by cell, would let a definition's edit go to the frames that asked.
+  - A frame that follows another on its line, when that one's width
+    changes, is laid out again where it now starts, though only an
+    alternative that no longer fits could change it.
+  - Undo and redo replace the document, and every part is laid out again,
+    twice over: once for the definitions and once for the parts, which are
+    all taken out and put in. Undo that said what it undid would cost what
+    it undid.
+  - An arrow key reads the lines of its part from the top to where the
+    selection starts, each time; the frames know where that is.
+- Laying a document out from nothing takes 20 ms where it took 16, and the
+  wheel 25 µs where it took 12: frames, and a layer more.
+- Where a comparison remains. A change of the selection, the folds or what
+  Lean gave is asked of each part by whether what the part takes of it
+  differs, and a frame on the way to a change is asked whether its own view
+  is as it was: of its value without what's inside it, and of the selection
+  at it. They're small values compared once each; none is a search for what
+  changed. After a write, a part's definitions and results are compared
+  with what they were before the frames are taken as they stand.
 - Entry numbers, which the Rust version shows in a margin.
 - Nothing checks that a handler changes what the view reads only through
   `change`; the state follows the edits, so a field set directly shows as a

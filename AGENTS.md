@@ -49,11 +49,19 @@ Read `README.md` first for what the repository is.
   to compare before and after a change. It says so if the layout or the
   scene the view keeps isn't what working it out again gives.
 - The view is incremental steps composed (`Progred/Editor.lean`), and
-  `view_ok` is their laws composed. What a part's layout reads has to be
-  in its `Input` (`Progred/Display.lean`): a layout that read anything
-  else would be kept when it shouldn't be. Something new the drawing
-  depends on goes into `Seen` and a `Frame`'s restriction of it, and
-  `touched` then asks it of each part.
+  `view_ok` is their laws composed. A part's frames are grown from its
+  `Input` (`Progred/Display.lean`), which has to hold all they read: a
+  frame that read anything else would be kept when it shouldn't be.
+  Something new the drawing depends on goes into `Seen` and an `Item`'s
+  restriction of it, and `touched` then asks it of each part.
+- A frame is drawn from its value without what's inside its elements and
+  fields (`shallow`), and from the selection only when it's at the frame
+  or a step in (`seen`). That's what `Progred/Regrow.lean`'s laws rest on:
+  a form that needs to read further in is a kid with a `Hint`, and what a
+  frame reads of its whole value goes through `deepOf`.
+- A function whose result is used twice binds it once (`let made := …`).
+  The compiler doesn't share a call repeated in two branches, and a
+  recursive one repeated is exponential.
 - The model's edits say what changed, and the view compares nothing to
   find out. What the view reads of the model (the document, the selection,
   the folds, what Lean gave, the scroll, the window's size) is changed only
@@ -64,7 +72,8 @@ Read `README.md` first for what the repository is.
   changed gets an edit that says so; it doesn't compare a value with what
   it was.
 - `progred_measure` says what events cost; run it before and after a
-  change to the view, on a notebook (`progred_measure 300`).
+  change to the view, on a notebook (`progred_measure 300`) and on the
+  same entries as one part (`progred_measure 300 one`).
 - Skinny is the language: the subset of Lean that `Progred/Skinny.lean`
   makes from a document. A function Lean supplies is a cell in
   `Progred/Builtin.lean` and a case in `Skinny.supplied`; what code is run

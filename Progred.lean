@@ -4,6 +4,8 @@ import Progred.GidText
 import Progred.Builtin
 import Progred.Layout
 import Progred.Display
+import Progred.Writes
+import Progred.Regrow
 import Progred.Model
 import Progred.Editing
 import Progred.Entries

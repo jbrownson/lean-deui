@@ -18,22 +18,28 @@ open Deui
 /-- What the projection is of, with another selection. -/
 def _root_.Progred.Shown.select (s : Shown) (sel : Option Selection) : Shown := { s with selection := sel }
 
-/-- Whether a frame is on the way to the selection: at it, or above it. -/
-def onWay (s : Shown) (seed : Seed) : Bool :=
+/-- Whether a path is on the way to the selection: its own, or above it. -/
+def onPath (s : Shown) (path : Path) : Bool :=
   match s.selection with
-  | some sel => seed.path.isPrefixOf sel.path
+  | some sel => path.isPrefixOf sel.path
   | none => false
+
+/-- Whether a frame is on the way to the selection: at it, or above it. -/
+def onWay (s : Shown) (seed : Seed) : Bool := onPath s seed.path
 
 /-- The edits that take a seed's frames, grown under `s`, to those grown
 under `s'`, which differs in its selection. A frame that sees the same of
-both is as it was, and so are its kids that neither selection is under; one
-that sees a difference is grown again. -/
+both is as it was, and so are its kids that neither selection is under,
+which aren't looked at; one that sees a difference is grown again. -/
 def reselect (s s' : Shown) : Nat → Seed → List (Fit.Edit Span)
   | 0, _ => []
   | fuel + 1, seed =>
     if sees s seed = sees s' seed then
       if onWay s seed || onWay s' seed then
-        (framed s seed).2.zipIdx.flatMap fun p => (reselect s s' fuel (seed.kid s p.1)).map (.kid p.2)
+        (framed s seed).2.zipIdx.flatMap fun p =>
+          (if onPath s (seed.path ++ p.1.step.toList) || onPath s' (seed.path ++ p.1.step.toList) then
+            reselect s s' fuel (seed.kid s p.1)
+          else []).map (.kid p.2)
       else []
     else [.replace (grow s' (fuel + 1) seed)]
 
@@ -47,7 +53,7 @@ theorem sees_off (s : Shown) (seed : Seed) (h : onWay s seed = false) : sees s s
   cases hs : s.selection with
   | none => rfl
   | some sel =>
-    simp only [onWay, hs] at h
+    simp only [onWay, onPath, hs] at h
     have notPrefix : ¬ seed.path <+: sel.path := by
       rw [← List.isPrefixOf_iff_prefix]
       simp [h]
@@ -71,7 +77,7 @@ theorem framed_select (s : Shown) (sel : Option Selection) (seed : Seed)
 theorem kid_path (s : Shown) (seed : Seed) (k : Kid) : (seed.kid s k).path = seed.path ++ k.step.toList := rfl
 
 theorem onWay_kid (s : Shown) (seed : Seed) (k : Kid) (h : onWay s seed = false) : onWay s (seed.kid s k) = false := by
-  unfold onWay at h ⊢
+  unfold onWay onPath at h ⊢
   cases hs : s.selection with
   | none => rfl
   | some sel =>
@@ -109,8 +115,14 @@ theorem reselect_ok (s : Shown) (sel : Option Selection) : ∀ (fuel : Nat) (see
       split
       · have h := Fit.run_kids (framed s seed).1 (fun k => grow s fuel (seed.kid s k))
           (fun k => grow (s.select sel) fuel (seed.kid s k))
-          (fun k => reselect s (s.select sel) fuel (seed.kid s k)) (framed s seed).2 []
-          (fun k _ => reselect_ok s sel fuel (seed.kid s k))
+          (fun k => if onPath s (seed.path ++ k.step.toList) || onPath (s.select sel) (seed.path ++ k.step.toList)
+            then reselect s (s.select sel) fuel (seed.kid s k) else []) (framed s seed).2 []
+          (fun k _ => by
+            split
+            · exact reselect_ok s sel fuel (seed.kid s k)
+            · next off =>
+              simp only [Bool.or_eq_true, not_or, Bool.not_eq_true] at off
+              exact (grow_off s sel fuel (seed.kid s k) off.1 off.2).symm)
         simp only [grow, framed_select s sel seed same]
         simpa [kid_select] using h
       · next off =>

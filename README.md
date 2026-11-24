@@ -49,18 +49,34 @@ module does.
 - `Drawn.lean`: a drawing on the screen, as a column's children. Its
   derivative turns each drawing edit into scene edits, without needing the
   drawing (`inc_ok`).
-- `Combine.lean`, `Sift.lean`, `Spans.lean`, `Flatten.lean`,
+- `Combine.lean`, `Spans.lean`, `Under.lean`, `Join.lean`,
   `Anchored.lean`: what a view is put together from, each correct if its
-  parts are. `sifted` is a list mapped under a context: when the context
-  is edited, each element says whether the edit touches it, and one that
-  says no gives what it gave and makes no edit; what makes it right is the
-  law that an element untouched gives the same under the edited context.
-  `flatBy` joins lists of rows, an element edited having its rows taken
-  out and its new ones put in; `anchored` puts rows at an offset into the
-  scrolled list; `layers` and `keyed` put scenes one over another, and
+  parts are. `mapUnder` is a list mapped under a context by a function
+  that keeps what it needs for each element: a context edit is given to
+  each element, which makes of it what it's sensitive to, and nothing
+  where it isn't; an element's own edit goes to it alone. `join` joins
+  lists that are each edited as a list, so one line of one part changed is
+  one line of the whole changed. `anchored` puts rows at an offset into
+  the scrolled list; `layers` and `keyed` put scenes one over another, and
   draw one afresh when its key changes, or when an edit is large enough
-  that drawing afresh costs less. Nothing here compares a value with what
+  that drawing afresh costs less. Nothing here compares a list with what
   it was to find a change: a change arrives as an edit.
+- `Text.lean`: text as lines of cells, made from tokens in reading order.
+  Its edit is a splice: so much taken out at a place, lines down and cells
+  along, and tokens put in. `splice_ok` is what makes it right: at the
+  end of `A`, taking out the size of `M`, a splice turns the lines of
+  `A ++ M ++ B` into the lines of `A ++ M' ++ B`. `rows` gives the lines
+  as a list, edited line by line.
+- `Fit.lean`: layout, by derivative. A tree of frames, each with a doc
+  that says how its own pieces and its kids may go (side by side, one
+  under another, indented, or the first of two ways that fits the ribbon),
+  is laid out as text, and kept as it's laid: each frame with where it
+  started and each kid as it was laid there. When a frame is replaced,
+  only the frames above it are walked again, each taking its other kids as
+  they stand, and what comes out is a splice where that frame's tokens
+  are; where a frame above now fits differently, a splice of that frame's.
+  `fit_ok` says the splices take the text to the edited tree's, and that
+  what's kept is what laying that out from nothing keeps.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
   a key, text typed or the wheel, to edits; a handler also reads what the
@@ -112,12 +128,19 @@ version does, what this one decides, and what isn't here yet.
 - `GidText.lean`: documents as text files; the Rust version's files read.
 - `Layout.lean`, `Display.lean`: the projection. A value is drawn by the
   form of its kind (text, numbers, notebook, section, evaluation, lambda,
-  call, value wrapper), the generic `kind name {fields}`, else raw, laid
-  out in characters, on one line where it fits a ribbon, else stacked.
-  Every drawn thing is an occurrence, so selections, keys and clicks find
-  their place.
-  The document is drawn in parts, an entry of the root notebook each, and
-  a part is laid out from an input that holds all it depends on.
+  call, value wrapper), the generic `kind name {fields}`, else raw, in
+  characters, on one line where it fits a ribbon, else stacked. Each value
+  is one frame, with the values inside it as its kids, and a frame is
+  drawn from little: its value without what's inside its elements and
+  fields, the definitions it looks up, and what of the selection is at
+  it. Every drawn thing is an occurrence, which its spans carry, so
+  selections, keys and clicks find their place. The document is drawn in
+  parts, an entry of the root notebook each.
+- `Writes.lean`, `Regrow.lean`: what a change does to a part's frames. A
+  write within a value, and a selection that changes, are each followed
+  down to where they land; a frame on the way that sees what it saw is
+  left as it is, and one that sees something new is grown again
+  (`rewrite_ok`, `reselect_ok`).
 - `Model.lean`, `Editing.lean`: the editor: selection, navigation by what's
   drawn, holes answered by offers as you type, lines typed in place, undo.
 - `Skinny.lean`, `Prelude.lean`, `Run.lean`: the language, Skinny. An
@@ -135,11 +158,13 @@ version does, what this one decides, and what isn't here yet.
   say what changed (`Model.lean`): a handler changes what the view reads
   only by a `Change`, which the model notes, so the state the app holds is
   the model the handler made. `Entries.lean` turns those edits into edits
-  of the document's parts, an entry written being its part replaced. Each
-  part keeps the cells it asked for, and a definition written works out
-  again only the parts that asked for it (`item_untouched`); a selection
-  that moves gives new inputs only to the parts it leaves and enters
-  (`input_of_not_touched`).
+  of the document's parts: an entry written within is its part written at
+  that path. Each part keeps its own: the cells it asked for, its frames,
+  and how they're laid out (`Deui/Fit.lean`). A definition written grows
+  again only the parts that asked for it (`item_untouched`); typing grows
+  again the one frame it's in, and what's laid out again is the frames
+  above it, each walked once; a selection that only moves is a wash under
+  the text, and lays nothing out.
 
 A kind's records are drawn by its def's `projection`, written in the
 document: a layout (`row`, `column`, `indent`, `either`, `words`, `faint`,
@@ -150,9 +175,12 @@ kind. `examples/projections.gid` has one of each: a fraction, and a bar as
 long as its amount.
 
 On a notebook of 3,300 lines in 300 entries (`progred_measure 300`): the
-wheel takes about 12 µs, a keystroke of typing 0.5 ms, an arrow key up to
-0.8 ms, and writing a definition that a tenth of the entries reach 2 ms,
-against 16 ms to lay the document out from nothing.
+wheel takes about 25 µs, an arrow key 50 µs, a keystroke of typing 0.2 to
+0.35 ms, and writing a definition that a tenth of the entries reach 4 ms,
+against 20 ms to lay the document out from nothing. On the same entries as
+one part, a list at the root (`progred_measure 300 one`): an arrow key
+50 µs and a keystroke 0.5 to 0.65 ms; before a part's layout had a
+derivative, each took a third of a second.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).

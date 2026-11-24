@@ -35,3 +35,12 @@ or a new axiom. -/
 
 /-- info: 'Progred.Editor.part_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Progred.Editor.part_ok
+
+/-- info: 'Progred.Display.reselect_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Display.reselect_ok
+
+/-- info: 'Progred.Display.rewrite_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Display.rewrite_ok
+
+/-- info: 'Progred.Editor.drawn_df_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Progred.Editor.drawn_df_ok

@@ -137,6 +137,12 @@ theorem layers_ok (g h : Cached ca (runs sceneEdits)) (hg : g.ok) (hh : h.ok) : 
   rw [run_append, run_update_head, run_update_second, g1, g2, h1, h2]
   rfl
 
+/-- A view that's always the one scene, whatever the value. -/
+def still (scene : Scene) : Cached ca (runs sceneEdits) :=
+  ⟨Unit, fun _ => (scene, ()), fun _ _ => ([], ())⟩
+
+theorem still_ok (scene : Scene) : (still (ca := ca) scene).ok := fun _ _ => rfl
+
 variable {K : Type} [DecidableEq K]
 
 /-- A view chosen by a key of the value, in a group of its own: while the

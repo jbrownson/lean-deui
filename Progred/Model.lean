@@ -297,21 +297,52 @@ def fresh (m : Model) : CellId × Model :=
 structure Layout where
   parts : List (List Line)
 
-/-- Where an occurrence starts, within its part: its line and column. -/
-structure Stop where
-  occ : Occ
+/-- Where a span is, within its part: its line, its place among the line's
+spans, and its column. -/
+structure Spot where
   line : Nat
+  index : Nat
   col : Nat
-  /-- Whether it's a place with no width: a point between things. -/
-  point : Bool := false
-  deriving Inhabited
+  deriving Inhabited, Repr
+
+/-- A line's spans from a place on, each with its place and column, that
+`p` accepts. -/
+def spansFrom (l : Line) (from_ : Nat) (p : Span → Bool) : List (Nat × Nat × Span) :=
+  let rec go (index col : Nat) : List Span → List (Nat × Nat × Span)
+    | [] => []
+    | s :: rest =>
+      if index ≥ from_ && p s then (index, col, s) :: go (index + 1) (col + s.text.length) rest
+      else go (index + 1) (col + s.text.length) rest
+  go 0 l.indent l.cells
+
+/-- The first span that `p` accepts, in lines counted from `line`, from a
+place in the first of them on: found without reading past it. -/
+def firstSpan (p : Span → Bool) : Nat → Nat → List Line → Option (Spot × Span)
+  | _, _, [] => none
+  | line, from_, l :: rest =>
+    match (spansFrom l from_ p).head? with
+    | some (index, col, s) => some (⟨line, index, col⟩, s)
+    | none => firstSpan p (line + 1) 0 rest
+
+/-- The last span that `p` accepts, in lines given last first, the first of
+them counted `line` and read only before a place in it. -/
+def lastSpan (p : Span → Bool) : Nat → Option Nat → List Line → Option (Spot × Span)
+  | _, _, [] => none
+  | line, before, l :: rest =>
+    let found := (spansFrom l 0 p).filter fun x => before.all (x.1 < ·)
+    match found.getLast? with
+    | some (index, col, s) => some (⟨line, index, col⟩, s)
+    | none => lastSpan p (line - 1) none rest
+
+/-- Whether a span is where an occurrence that `want` accepts starts. -/
+def startOf (want : OccKind → Bool) (s : Span) : Bool :=
+  s.start && (s.occ.map fun o => want o.kind).getD false
 
 /-- Each occurrence that's drawn in a part, where it starts, in reading
 order. -/
-def stops (lines : List Line) : List Stop :=
+def stops (lines : List Line) : List (Spot × Occ) :=
   lines.zipIdx.flatMap fun (l, i) =>
-    l.placed.filterMap fun (col, s) =>
-      if s.start then s.occ.map fun o => ⟨o, i, col, s.text.isEmpty && s.face != .caret⟩ else none
+    (spansFrom l 0 (startOf fun _ => true)).filterMap fun (index, col, s) => s.occ.map fun o => (⟨i, index, col⟩, o)
 
 namespace Layout
 
@@ -400,39 +431,52 @@ def partOf (m : Model) (sel : Selection) : Option Nat :=
       | _ => none
     (if sel.path.length ≥ 2 then among sel.path else none).orElse fun _ => sel.anchor.bind among
 
-/-- Where the selection is drawn: its part, and its stop there. -/
-def Layout.here (l : Layout) (m : Model) : Option (Nat × Nat) :=
+/-- Where the selection is drawn: its part, and where it starts there. -/
+def Layout.here (l : Layout) (m : Model) : Option (Nat × Spot) :=
   m.selection.bind fun sel =>
     (m.partOf sel).bind fun b =>
       (l.parts[b]?).bind fun lines =>
-        ((stops lines).findIdx? fun s => isSelected sel s.occ).map (b, ·)
+        (firstSpan (fun s => s.start && (s.occ.map (isSelected sel)).getD false) 0 0 lines).map fun found =>
+          (b, found.1)
 
 def isPlace (k : OccKind) : Bool := k == .value || k == .hole
 def isTabStop (k : OccKind) : Bool := k == .hole || k == .insertion || k == .fieldEnd || k == .entryPoint
 
-/-- The nearest stop after or before a place that `want` accepts: in the
-same part, else in the parts that follow, or come before. From no place,
-the first of the document, or the last. -/
-def Layout.next (l : Layout) (from_ : Option (Nat × Nat)) (forward : Bool) (want : OccKind → Bool) :
-    Option Stop :=
-  let wanted (lines : List Line) : List Stop := (stops lines).filter fun s => want s.occ.kind
-  let pick (found : List Stop) : Option Stop := if forward then found.head? else found.getLast?
+/-- The nearest occurrence after or before a place that `want` accepts: in
+the same part, else in the parts that follow, or come before. From no
+place, the first of the document, or the last. It reads on from the place
+until it finds one. -/
+def Layout.next (l : Layout) (from_ : Option (Nat × Spot)) (forward : Bool) (want : OccKind → Bool) :
+    Option Occ :=
+  let p := startOf want
   -- The first of the parts that has one, in the order they're given.
-  let others (parts : List (List Line)) : Option Stop := parts.findSome? fun lines => pick (wanted lines)
-  match from_ with
-  | some (b, i) =>
-    ((l.parts[b]?).bind fun lines =>
-      let all := stops lines
-      pick ((if forward then all.drop (i + 1) else all.take i).filter fun s => want s.occ.kind)).orElse
-      fun _ => others (if forward then l.parts.drop (b + 1) else (l.parts.take b).reverse)
-  | none => others (if forward then l.parts else l.parts.reverse)
+  let others (parts : List (List Line)) : Option (Spot × Span) :=
+    parts.findSome? fun lines =>
+      if forward then firstSpan p 0 0 lines else lastSpan p (lines.length - 1) none lines.reverse
+  let found :=
+    match from_ with
+    | some (b, at_) =>
+      ((l.parts[b]?).bind fun lines =>
+        if forward then firstSpan p at_.line (at_.index + 1) (lines.drop at_.line)
+        else lastSpan p at_.line (some at_.index) (lines.take (at_.line + 1)).reverse).orElse
+        fun _ => others (if forward then l.parts.drop (b + 1) else (l.parts.take b).reverse)
+    | none => others (if forward then l.parts else l.parts.reverse)
+  found.bind (·.2.occ)
 
 /-- The selection moved to the next or previous thing drawn. -/
 def step (laid : Model → Layout) (m : Model) (forward : Bool) (want : OccKind → Bool := isPlace) : Model :=
   let l := laid m
   match l.next (l.here m) forward want with
-  | some s => m.select s.occ
+  | some o => m.select o
   | none => if want .insertion then m.change (.select none) else m
+
+/-- The places on the first of some lines that has any. -/
+def placesOn : List Line → List (Nat × Nat × Span)
+  | [] => []
+  | l :: rest =>
+    match spansFrom l 0 (startOf isPlace) with
+    | [] => placesOn rest
+    | found => found
 
 /-- The selection moved to the nearest line above or below with something
 on it, to what starts nearest the column it's at. -/
@@ -440,33 +484,30 @@ def stepLine (laid : Model → Layout) (m : Model) (down : Bool) : Model :=
   let l := laid m
   match l.here m with
   | none => m.step laid true
-  | some (b, i) =>
+  | some (b, here) =>
     match l.parts[b]? with
     | none => m
     | some lines =>
-      let all := stops lines
-      let here := all[i]!
-      -- The places of a part, among those `keep` accepts.
-      let places (lines : List Line) (keep : Stop → Bool) : List Stop :=
-        (stops lines).filter fun s => isPlace s.occ.kind && keep s
-      let away (s : Stop) : Nat := if s.col < here.col then here.col - s.col else s.col - here.col
-      let nearest (found : List Stop) : Option Stop :=
-        (if down then found.head? else found.getLast?).map fun near =>
-          (found.filter (·.line == near.line)).foldl (fun best s => if away s < away best then s else best) near
-      let target :=
-        (nearest (places lines fun s => if down then s.line > here.line else s.line < here.line)).orElse
-          fun _ => (if down then l.parts.drop (b + 1) else (l.parts.take b).reverse).findSome? fun other =>
-            nearest (places other fun _ => true)
+      let away (col : Nat) : Nat := if col < here.col then here.col - col else col - here.col
+      let nearest (found : List (Nat × Nat × Span)) : Option Occ :=
+        match found with
+        | [] => none
+        | first :: rest =>
+          (rest.foldl (fun best x => if away x.2.1 < away best.2.1 then x else best) first).2.2.occ
+      let within := placesOn (if down then lines.drop (here.line + 1) else (lines.take here.line).reverse)
+      let target := (nearest within).orElse fun _ =>
+        (if down then l.parts.drop (b + 1) else (l.parts.take b).reverse).findSome? fun other =>
+          nearest (placesOn (if down then other else other.reverse))
       match target with
-      | some s => m.select s.occ
+      | some o => m.select o
       | none => m
 
 /-- The scroll that keeps the selection's line in the window. -/
 def revealed (l : Layout) (m : Model) : Model :=
   match l.here m with
   | none => m
-  | some (b, i) =>
-    let top := (l.lineOf b + ((l.parts[b]?).map fun lines => ((stops lines)[i]?.map (·.line)).getD 0).getD 0) * lineHeight
+  | some (b, here) =>
+    let top := (l.lineOf b + here.line) * lineHeight
     let room := m.height - 2 * margin
     if top < m.scroll then m.change (.scroll top)
     else if top + lineHeight > m.scroll + room then m.change (.scroll (top + lineHeight - room))

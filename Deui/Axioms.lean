@@ -2,9 +2,7 @@ import Deui.Column
 import Deui.Drawn
 import Deui.Scroll
 import Deui.App
-import Deui.Flatten
 import Deui.Anchored
-import Deui.Sift
 import Deui.Fit
 import Deui.Join
 import Deui.Under
@@ -57,15 +55,6 @@ new axiom. -/
 /-- info: 'Deui.App.applied_shows' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.App.applied_shows
 
-/-- info: 'Deui.Lists.sifted_ok' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms Deui.Lists.sifted_ok
-
-/-- info: 'Deui.Lists.flatBy_inc_ok' depends on axioms: [propext] -/
-#guard_msgs in #print axioms Deui.Lists.flatBy_inc_ok
-
-/-- info: 'Deui.Lists.siftedWith_ok' depends on axioms: [propext, Quot.sound] -/
-#guard_msgs in #print axioms Deui.Lists.siftedWith_ok
-
 /-- info: 'Deui.Text.splice_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Text.splice_ok
 
@@ -80,3 +69,6 @@ new axiom. -/
 
 /-- info: 'Deui.Lists.mapUnder_ok' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in #print axioms Deui.Lists.mapUnder_ok
+
+/-- info: 'Deui.Lists.swaps_ok' depends on axioms: [propext] -/
+#guard_msgs in #print axioms Deui.Lists.swaps_ok
