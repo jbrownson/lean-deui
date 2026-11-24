@@ -277,6 +277,79 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   call's function or argument or a kind, it's its name. Space folds either
   way. The Rust version follows cells until a cycle.
 
+## Tried: drawing as composed derivatives
+
+`Spike/Derived.lean`, with `Deui/Tree.lean` under it, tries the other way
+to make a part's frames: not by growing frames and asking afterwards what
+each one saw, but by writing the drawing so that each edit has somewhere
+to go. It isn't the editor's view. It draws lists, records, literals and
+cells by name, with no selection, holes, folds, kinds or open cells, and
+`progred_derived` runs it beside the view as it is, on the same edits,
+checking that the two draw the same lines and that each keeps the lines
+it would draw from nothing.
+
+- **A value is a tree, labelled with what each node itself shows:** a
+  list's positions, a record's labels, a cell's id, a literal's bytes. A
+  node's doc is drawn from its label and the names its keys look up, and
+  the definitions reach the doc no other way (`Tree.reading`).
+- **A write is an edit of the tree at the place it lands** (`rewrite`). It
+  goes down the steps as the write does. A value set where one was is that
+  kid replaced or edited; one put in is the node's label and kids again,
+  the others kept; a step taken away, the same without it.
+  `rewrite_ok` says the edits take the tree to the tree of the value
+  after, whatever order a record's fields are in.
+- **A definition written draws again the nodes with that key,** their
+  kids kept, and no others (`Tree.refresh`). A node is stale when an edit
+  touches one of its keys; `get_untouched` says a cell no edit writes has
+  the name it had, and `Tree.reading_touched` makes the rest follow.
+- `lines_ok` is the whole of it composed: the tree, its frames, the
+  layout, the rows.
+
+What it keeps is the value and its tree. It records no reads, compares no
+frame with what it saw before, and matches no kids by key. The one
+comparison left is the layout's, of tokens at the front and the end of a
+frame walked again (`Fit.mend`).
+
+On 300 entries, 3,300 lines, each edit made 20 times at different places
+(`progred_derived 300`, and `progred_derived 300 parts`):
+
+| | one part: as it is | derived | a part an entry: as it is | derived |
+|---|---|---|---|---|
+| from nothing | 24 ms | 16 ms | 22 ms | 13.5 ms |
+| a text written | 2.4 ms | 0.45 ms | 46 µs | 20 µs |
+| an element added to a list | 2.4 ms | 0.5 ms | 80 µs | 44 µs |
+| a field added to a record | 2.5 ms | 0.5 ms | 56 µs | 21 µs |
+| an entry added | 2.7 ms | 0.9 ms | | |
+| a cell a tenth of the entries show, renamed | 36 ms | 10.5 ms | 3.8 ms | 1.7 ms |
+| a label every entry has, renamed | 34 ms | 88 ms | 30 ms | 10 ms |
+| a cell nothing shows, written | 1 µs | 0.3 ms | 0.5 ms | 1 ms |
+
+What that says:
+
+- A write costs a fifth as much in one part, and a half to a third in a
+  part of its own. As it is, a write works out again what the part
+  reaches, which reads the whole part; derived, nothing reads the part.
+- A rename gives 30 line edits, or 300, where the view as it is gives
+  thousands: only the nodes that show the name are drawn again. In a part
+  of their own that's two to three times quicker.
+- In one part, 300 nodes renamed is slower than growing the part again.
+  The layout takes its edits one at a time, and each walks the root's 300
+  kids: 300 edits, 0.3 ms each. That's the layout's cost, the same one a
+  keystroke in that list pays once, and it wants the layout to take
+  several kids' edits in one walk.
+- A cell nothing shows costs a walk of every node to find that out, 50 ns
+  a node, and each part its own copy of the definitions brought up to
+  date. As it is, a part keeps the cells it asked for, and looks there.
+  An index from cell to the nodes with that key, kept as a function of
+  the tree, would make it what the edit touches.
+
+What it would take to be the view: every form in `Progred/Display.lean`
+written as a label, its keys and a doc; a kid's hint as part of its label;
+a cell drawn open, whose kids are its definition's, so that a definition
+written is an edit of the tree and not only of docs; the selection and the
+folds as context found by path, not by walking; kinds, whose fields are
+looked up from what a first lookup gives.
+
 ## Where it stands against the Rust version
 
 Here, and tried (`progred_play` plays keys through the editor with no window;

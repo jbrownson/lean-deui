@@ -68,3 +68,8 @@ lean_exe progred where
 /-- Times Progred's projection on files. -/
 lean_exe progred_measure where
   root := `Spike.Measure
+
+/-- A spike: lists, records and names drawn as composed derivatives,
+measured against the view as it is. -/
+lean_exe progred_derived where
+  root := `Spike.Derived

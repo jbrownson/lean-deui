@@ -6,6 +6,7 @@ import Deui.Anchored
 import Deui.Fit
 import Deui.Join
 import Deui.Under
+import Deui.Tree
 
 /-! Every law's axioms, checked by `lake build`: it fails on a `sorry` or a
 new axiom. -/
@@ -72,3 +73,9 @@ new axiom. -/
 
 /-- info: 'Deui.Lists.swaps_ok' depends on axioms: [propext] -/
 #guard_msgs in #print axioms Deui.Lists.swaps_ok
+
+/-- info: 'Deui.Tree.drawn_ok' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Tree.drawn_ok
+
+/-- info: 'Deui.Tree.reading_touched' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in #print axioms Deui.Tree.reading_touched

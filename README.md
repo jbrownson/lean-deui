@@ -79,6 +79,15 @@ module does.
   the front and at the end.
   `fit_ok` says the splices take the text to the edited tree's, and that
   what's kept is what laying that out from nothing keeps.
+- `Tree.lean`: a tree drawn node by node, as frames for `Fit.lean`: each
+  node's own doc from its label and a context, its kids in the doc's
+  slots. An edit of the tree is the same edit of the frames. An edit of
+  the context draws again the nodes it makes stale, their kids kept: a
+  node says whether an edit could change its doc, and `drawn_ok` holds it
+  to that. A node drawn from what its keys look up is stale when an edit
+  touches one of its keys (`reading_touched`); nothing is recorded while
+  drawing. Progred's view doesn't use it yet: `Spike/Derived.lean` tries
+  it, and `docs/progred-port.md` says what came of that.
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
   a key, text typed or the wheel, to edits; a handler also reads what the
@@ -210,6 +219,7 @@ lake build progred_play && .lake/build/bin/progred_play # plays keys through Pro
 .lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
 .lake/build/bin/progred examples/projections.gid        # kinds drawn by projections in the document
 lake build progred_measure && .lake/build/bin/progred_measure 300  # what events cost, on a notebook of 300 entries
+lake build progred_derived && .lake/build/bin/progred_derived 300  # a spike: drawing as composed derivatives, against the view as it is
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version

@@ -13,6 +13,7 @@ import Deui.Text
 import Deui.Fit
 import Deui.Join
 import Deui.Under
+import Deui.Tree
 import Deui.App
 import Deui.Screen
 import Deui.Axioms
