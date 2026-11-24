@@ -194,27 +194,63 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   written at that path, and one added or taken away is a part inserted or
   deleted (`Progred/Entries.lean`, `edits_ok`). Each part keeps its own, and
   is given every edit of what it's drawn under, of which it makes what it's
-  sensitive to (`Deui/Under.lean`). It keeps what it reaches, with every
-  cell it asked for on the way, defined or not: a definition written grows
-  the part again only if it asked for that cell (`reach_agree`,
-  `item_untouched`). It keeps its frames, and how they're laid out; its
-  lines are edited line by line, joined with the other parts', the window
-  shows the lines that fit, and each is a row of the scene. Every step is
-  one of deui's, proved, and `view_ok` is their laws composed.
-- **A value is a frame, and a frame is drawn from little.** The projection
-  draws each value as one frame, with the values inside it as its kids
-  (`Progred/Display.lean`). A frame is drawn from its value without what's
-  inside its elements and fields, the definitions it looks up, and the
-  selection only when it's at the frame or a step in, with what's typed
-  only where it's typed. So two changes can be followed down a part's
-  frames to where they land, each frame on the way asked only whether what
-  it sees is as it was (`Progred/Regrow.lean`): a selection that changes
-  (`reselect_ok`), and a write within a value (`rewrite_ok`). A frame that
-  sees the same is left, with every kid the change isn't on the way to;
-  one that sees something new is grown again with all under it. Typing
-  grows one frame again. A form that would read further into its value
-  makes that a kid instead: a record's name, a lambda's parameters, a
-  notebook's entries.
+  sensitive to (`Deui/Under.lean`). A part's lines are edited line by
+  line, joined with the other parts', the window shows the lines that
+  fit, and each is a row of the scene. Every step is one of deui's,
+  proved, and `view_ok` is their laws composed.
+- **A part's value is a tree that mirrors it** (`Progred/Derived/Tree.lean`):
+  a node for each list, record, cell, blob and literal, its kids its
+  elements' and fields' nodes in the order the value holds them. A node's
+  label is all its own doc is drawn from: its path, how its place asks it
+  to be drawn (which its parent's kind and its own label say), and its
+  value without what's inside its elements and fields. A node drawn from
+  more than that has its whole value too: an evaluation, for what its
+  expression gave, and a record of a kind a function may draw.
+- **A form draws a node's own doc, its kids in slots**
+  (`Progred/Derived/Forms.lean`). A slot is the kid's place among the
+  value's own fields, so a record drawn in another order, or with only
+  some fields, is another doc over the same kids. Where a value has none,
+  the node draws the hole itself: a hole, a field or an element being
+  added and a label being typed are the docs of the node they're in. The
+  selection changes docs, and never the tree.
+- **A form reads the definitions through `look`, which answers for the
+  node's keys and no others** (`Tree.reading2`): the cells its own value
+  names, and the cells the definitions of its kind, its function or
+  itself name. So a definition written draws again the nodes with that
+  key, their kids kept (`Tree.refresh`), and that holds for every form
+  with no proof of its own. A key left out would show as a name not
+  drawn.
+- **A node sees the selection only at its own path, or a step in**
+  (`seenBy`), and of what evaluations and functions gave, and of what
+  errors are about, only what's for its own value (`view`). A keystroke
+  is stale to the node it's typed at, and to its parent only where the
+  parent draws the hole it's in (`differs`, `view_of_not_differs`). What
+  an edit is, is worked out once for a walk, and most nodes are told
+  they're nowhere near by a number in their label.
+- **A write is an edit of the tree at the place it lands** (`rewrite`). It
+  goes down the steps as the write does. A value set where one was, or put
+  in, is the node's label and kids again, the others kept; a kid edited
+  further in is that kid's edits, and the label again of a node drawn
+  from its whole value; a kind set is the record's tree again, since its
+  fields are drawn by its kind. `rewrite_ok` says the edits take the tree
+  to the tree of the value after, whatever order a record's fields are in.
+- **A cell drawn open has its definition's tree hung under it**
+  (`Progred/Derived/Links.lean`), and a parameter its definition's, of
+  which its type is drawn. So the tree is a function of the value, the
+  definitions and the folds. An edit of the definitions or the folds
+  walks the tree for its cells: one that opens or shuts, or whose
+  definition is written, has what hangs under it made again; one that
+  stays as it is is walked on into (`relinkCell`, `treed_ok`).
+- **A part is drawn with what's its own** (`Progred/Derived/Part.lean`):
+  the selection if it's in the part, and the values its evaluations'
+  errors are about. An edit that writes no definition, isn't of the part
+  and leaves that as it was is told so by the part, and goes no further
+  (`part_ok`).
+- **Nothing is recorded, and nothing compared but tokens.** A part keeps
+  its value and its tree. It keeps no list of what it read, compares no
+  node with what it saw before, and matches no kids by key. The one
+  comparison left is the layout's, of tokens at the front and the end of
+  a frame walked again (`Fit.mend`).
 - **Layout is a derivative** (`Deui/Fit.lean`). A part's frames are laid
   out as text within the ribbon, and kept as they're laid: each frame with
   where it started, and each kid as it was laid there. A frame grown again
@@ -224,14 +260,15 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   there is. Where a frame now fits differently (it was on one line and
   isn't), that frame's text is replaced. A splice becomes edits of the
   lines it reaches.
-- **A frame drawn again keeps its kids.** Where a frame sees something new
-  (an element added or taken away, a field given a value, a hole opened
-  or closed), it's reshaped: its doc is new, and each kid is one it had,
-  found by its step and how it's drawn, or grown new. The layout walks the
-  frame again with the kids it had as they're kept, and splices the text
-  between what came out the same at the front and at the end
-  (`Deui/Fit.lean`, `mend`). An element added to a list of 300 lays out
-  that element.
+- **A node drawn again keeps its kids.** Where a node's label is new
+  (an element added or taken away, a field given a value), or its doc is
+  (a hole opened or closed, a name it shows changed), its frame is
+  reshaped: its doc is new, and each kid is one it had or a new one, as
+  the edit says. The layout walks the frame again with the kids it had as
+  they're kept, and splices the text between what came out the same at
+  the front and at the end (`Deui/Fit.lean`, `mend`). An element added to
+  a list of 300 lays out that element. A frame takes a run of edits for
+  each of its kids in one walk (`Fit.Edit.each`).
 - **Undo is the changes that take a step back.** Every change has one that
   takes it back, worked out from the model before it's made
   (`Model.back`): a write at a path by a write there of what was, an entry
@@ -277,130 +314,63 @@ completion, defs' `projection` and `offers`, handlers written in Grap.
   call's function or argument or a kind, it's its name. Space folds either
   way. The Rust version follows cells until a cycle.
 
-## The view by derivative, beside the view as it is
+## What the view costs
 
-`Progred/Derived/`, on `Deui/Tree.lean`, is the view being made the other
-way: not by growing frames and asking afterwards what each one saw, but by
-writing the drawing so that each edit has somewhere to go. It isn't the
-editor's view yet. `progred_derived` runs it beside the view as it is:
-with files, it says which of their parts the two draw the same; with a
-number, it times the same edits through both, checking that each keeps
-the lines it would draw from nothing.
+The view was first made by growing a part's frames and asking afterwards
+what each one saw: a part kept the cells it had asked for, and a
+definition written grew again every part that had asked for it. It's now
+made the other way (the decisions above): the drawing is written so that
+each edit has somewhere to go. `Progred/Display.lean` still has the forms
+it was grown from, and `progred_derived` draws the example files both
+ways: every part the same, with nothing selected, with each of 1,848
+selections, and with what evaluations might have given. Two things are
+drawn otherwise on purpose: a record's name is bare wherever it's drawn,
+a layout's part too, which was in quotes; and the `: _` after a label
+being typed is the record's own, where it was no occurrence.
 
-- **A value is a tree that mirrors it** (`Derived/Tree.lean`): a node for
-  each list, record, cell, blob and literal, its kids its elements' and
-  fields' nodes in the order the value holds them. A node's label is all
-  its own doc is drawn from: its path, how its place asks it to be drawn
-  (which its parent's kind and its own label say), and its value without
-  what's inside its elements and fields. A node drawn from more than that
-  has its whole value too: an evaluation, for what its expression gave,
-  and a record of a kind a function may draw.
-- **A form draws a node's own doc, its kids in slots** (`Derived/Forms.lean`).
-  A slot is the kid's place among the value's own fields, so a record
-  drawn in another order, or with only some fields, is another doc over
-  the same kids. Where a value has none, the node draws the hole itself.
-- **A form reads the definitions through `look`, which answers for the
-  node's keys and no others** (`Tree.reading2`): the cells its own value
-  names, and the cells the definitions of its kind, its function or
-  itself name. So `reading2_touched` holds for every form with no proof
-  of its own: a definition written draws again the nodes with that key,
-  their kids kept (`Tree.refresh`). A key left out would show as a name
-  not drawn, which the check against the view as it is finds.
-- **A write is an edit of the tree at the place it lands** (`rewrite`). It
-  goes down the steps as the write does. A value set where one was, or put
-  in, is the node's label and kids again, the others kept; a kid edited
-  further in is that kid's edits, and the label again of a node drawn
-  from its whole value; a kind set is the record's tree again, since its
-  fields are drawn by its kind. `rewrite_ok` says the edits take the tree
-  to the tree of the value after, whatever order a record's fields are in.
-- **A cell drawn open has its definition's tree hung under it**
-  (`Derived/Links.lean`), and a parameter its definition's, of which its
-  type is drawn. So the tree is a function of the value, the definitions
-  and the folds. An edit of the definitions or the folds walks the tree
-  for its cells: one that opens or shuts, or whose definition is written,
-  has what hangs under it made again; one that stays as it is is walked
-  on into (`relinkCell`). `treed_ok` is the law of the tree under all
-  three.
-- **A node sees the selection only at its own path, or a step in**
-  (`seenBy`), and of what evaluations and functions gave, only what's for
-  its own value (`view`). So a selection typed in is stale to the node
-  it's at, and to its parent only where the parent draws the hole it's in
-  (`differs`); `view_of_not_differs` is what the walk leans on. A hole, a
-  field or an element being added, and a label being typed are drawn by
-  the node they're in, not as frames of their own: the selection changes
-  docs, and never the tree.
-- `lines_ok` is the whole of it composed: the tree, its frames, the
-  layout, the rows, under the definitions and what of the editor's state
-  a part is drawn with.
+`progred_measure`, on 300 entries, before and after:
 
-What it keeps is the value and its tree. It records no reads, compares no
-frame with what it saw before, and matches no kids by key. The one
-comparison left is the layout's, of tokens at the front and the end of a
-frame walked again (`Fit.mend`).
-
-Where it is: every form, and the selection. On the example files
-(`tour.gid`, `projections.gid`, and the Rust version's twelve examples and
-four fixtures) the two draw every part the same, with nothing selected
-and with each of 1,848 selections: typing over a value, a hole being
-filled, an element, a field, a label and an entry being added. Two things
-are drawn otherwise on purpose: a record's name is bare wherever it's
-drawn, a layout's part too, where the view as it is draws that one in
-quotes; and the `: _` after a label being typed is the record's own,
-where the view as it is draws it in a frame of its own, as no occurrence.
-
-Still to come, in order: errors marked; then the editor's parts drawn
-this way, and `Progred/Display.lean`'s forms, `Progred/Regrow.lean` and
-what a part reaches taken out.
-
-On 300 entries, 3,300 lines, each edit made 20 times at different places
-(`progred_derived 300`, and `progred_derived 300 parts`):
-
-| | one part: as it is | derived | a part an entry: as it is | derived |
+| | a notebook: before | now | one list at the root: before | now |
 |---|---|---|---|---|
-| from nothing | 25 ms | 21 ms | 22 ms | 18 ms |
-| a text written | 2.4 ms | 0.4 ms | 49 µs | 18 µs |
-| an element added to a list | 2.3 ms | 0.45 ms | 79 µs | 46 µs |
-| a field added to a record | 2.5 ms | 0.5 ms | 64 µs | 28 µs |
-| an entry added | 2.7 ms | 1 ms | | |
-| a definition a tenth of the entries show open, written | 30 ms | 6 ms | 4.3 ms | 3.8 ms |
-| a label every entry has, renamed | 31 ms | 38 ms | 32 ms | 10 ms |
-| a keystroke, typing in a text | 0.55 ms | 0.8 ms | | |
-| a cell folded shut, another opened | 26 ms | 1 ms | | |
-| a cell nothing shows, written | 2 µs | 1 ms | 0.6 ms | 2.1 ms |
+| from nothing | 20 ms | 21 ms | 21 ms | 20 ms |
+| the wheel | 23 µs | 22 µs | 30 µs | 28 µs |
+| an arrow key | 51 µs | 55 µs | 48 µs | 48 µs |
+| a keystroke, typing | 0.34 ms | 0.27 ms | 0.5 to 0.67 ms | 1.2 ms |
+| a new entry, typed | 0.24 ms | 0.3 ms | 2.6 ms | 1 ms |
+| a function added | 0.52 ms | 1.2 ms | 20 ms | 2 ms |
+| typing in its definition | 0.24 ms | 0.1 ms | 0.5 ms | 0.8 ms |
+| undo, and redo | 0.46 ms | 2.1 ms | 32 to 49 ms | 2.5 ms |
+| a definition a tenth of the entries reach, written | 3.4 ms | 6.1 ms | 32 to 50 ms | 10 ms |
+| every definition written at once | 61 ms | 48 ms | | 105 ms |
+| a place for an element, the element, and gone | 0.2 to 0.6 ms | 0.1 to 0.4 ms | | 1.6 to 3.4 ms |
 
-What that says:
+What that says, and what's owed:
 
-- A write costs a fifth as much in one part, and a half to a third in a
-  part of its own. As it is, a write works out again what the part
-  reaches, which reads the whole part; derived, nothing reads the part.
-- A rename gives 30 line edits, or 300, where the view as it is gives
-  thousands: only the nodes that show the name are drawn again.
-- In one part, 300 nodes renamed costs what growing the part again
-  does. It was 88 ms while the layout took its edits one at a time, each
-  walking the root's 300 kids: a frame now takes a run of edits for each
-  of its kids in one walk (`Fit.Edit.each`), and `Tree.refresh` gives it
-  one. What's left is the lines: 300 splices, each made in a list of
-  3,300 lines by walking to its place. Every stage after the layout keeps
-  its lines that way, so many changes at once in one long part cost the
-  part's length each, whoever makes them. A part an entry doesn't pay it.
-- A keystroke in one long part is dearer than it is now. As it is, the
-  frames the selection is at are found by its path. Derived, every node
-  is asked whether it sees the selection, and most say no by one number
-  in their label: 6,000 nodes, 0.4 ms, most of it reaching them in
-  memory. What would take it away is the context narrowing as it goes
-  down: a node whose path the selection's doesn't start with passes none
-  to its kids, and a subtree that's passed nothing new isn't walked. A
-  part an entry is small, and doesn't feel it.
-- A fold is the one cell made again, where the view as it is grows the
-  part again.
-- A definition written costs two walks of every node, whoever shows it:
-  one of the tree for its cells, one of the nodes for their keys, about
-  0.1 µs a node each. With a part an entry it's dearer still, 7 µs a
-  part: each part keeps the definitions three times over, for the tree,
-  the docs and the ribbon, and brings each copy up to date. As it is, a
-  part keeps the cells it asked for, and looks there. Keeping the
-  definitions once a part, and an index from cell to the nodes with that
-  key, kept as a function of the tree, are what would take that down.
+- One long part no longer pays its whole length for a definition written
+  or a function added, an undo of either, or a fold: a tenth to a
+  twentieth of what it did.
+- A definition written costs every part two walks of its nodes, one of
+  the tree for its cells and one of the nodes for their keys: 4 µs a
+  part, where a part used to look in the list of cells it had asked for,
+  1 µs. So with a part an entry, a function added, and the undo of it,
+  are two to four times dearer, though a millisecond or two. What would
+  take that down is an index from cell to the nodes with that key, kept
+  as a function of the tree.
+- A definition a tenth of the entries show gives 66 edits of lines where
+  it gave 2 of the whole window. The lines after the layout are a list,
+  and each edit of it walks to its place; many small edits at once cost
+  more there than a few large ones did.
+- A keystroke in one long part is dearer than it was. The frames the
+  selection was at were found by its path; now every node is asked
+  whether it sees the selection, and most say no by one number in their
+  label: 6,000 nodes, 0.4 ms, most of it reaching them in memory. What
+  would take it away is the context narrowing as it goes down: a node
+  whose path the selection's doesn't start with passes none to its kids,
+  and a subtree that's passed nothing new isn't walked.
+- 300 nodes renamed in one part cost what growing the part again did. A
+  frame takes a run of edits for each of its kids in one walk, so the
+  layout is no longer what that costs; the lines are, 300 splices each
+  made in a list of 3,300 lines by walking to its place.
 
 ## Where it stands against the Rust version
 
@@ -437,17 +407,16 @@ the window was driven under Xvfb):
 - Projections defined in the document: a def's `projection` as a layout, and
   as a function of the record (`examples/projections.gid`), their parts edited
   in place.
-- The view by derivative, down to a part's frames. `progred_measure`, on a
+- The view by derivative, down to a node's own doc. `progred_measure`, on a
   notebook of 3,300 lines in 300 entries, a tenth of which reach each of
-  ten definitions: the wheel about 25 µs, an arrow key 50 µs, a keystroke
-  0.2 to 0.35 ms, an element added or taken away 0.2 to 0.6 ms, undo and
-  redo 0.1 to 0.5 ms, a definition written 4 ms, against 20 ms to lay it
-  out from nothing. On the same entries as one part, a list of 300 records
-  at the root (`progred_measure 300 one`): an arrow key 50 µs, a keystroke
-  0.5 to 0.6 ms, the place for a new field 1 ms. Before a part's layout
-  had a derivative, a keystroke or an arrow key there took a third of a
-  second. `progred_measure 300 structure` times changes of structure one
-  at a time.
+  ten definitions: the wheel about 25 µs, an arrow key 55 µs, a keystroke
+  0.1 to 0.3 ms, an element added or taken away 0.1 to 0.4 ms, a function
+  added 1.2 ms, a definition written 6 ms, against 21 ms to lay it out
+  from nothing. On the same entries as one part, a list of 300 records at
+  the root (`progred_measure 300 one`): an arrow key 50 µs, a keystroke
+  1.2 ms, a function added 2 ms, a definition written 10 ms. What the
+  view costs, above, has the rest. `progred_measure 300 structure` times
+  changes of structure one at a time.
 
 Not here yet:
 

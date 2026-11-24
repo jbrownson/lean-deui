@@ -1,4 +1,4 @@
-import Progred.Regrow
+import Progred.Derived.Part
 import Deui.Lists
 
 /-!
@@ -125,11 +125,6 @@ What the view reads of a model is changed by a `Change`, which the model
 notes; the rest is set freely. A model's edits are the changes it noted,
 then the rest: so the state the app holds, which is those edits applied, is
 the model the handler made. -/
-
-/-- A table of definitions with one written, or taken away. -/
-def defined (cells : Std.TreeMap CellId Value) (c : CellId) : Option Value → Std.TreeMap CellId Value
-  | some v => cells.insert c v
-  | none => cells.erase c
 
 /-- Entries with the value of the one at `i` replaced. -/
 def replaceAt : List (Position × Value) → Nat → Value → List (Position × Value)
@@ -307,23 +302,6 @@ def stepped (m : Model) (step : List Change) : Model × List Change :=
       | .select sel => .select (sel.map fun s => { path := s.path })
       | c => c)
 
-/-- Writing one cell's definition leaves every other cell's as it was. -/
-theorem defined_other (cells : Std.TreeMap CellId Value) (c : CellId) (v : Option Value) (x : CellId)
-    (h : x ≠ c) : (defined cells c v)[x]? = cells[x]? := by
-  have ne : compare c x ≠ .eq := fun e => h (Std.LawfulEqCmp.eq_of_compare e).symm
-  cases v with
-  | some v => simp only [defined, Std.TreeMap.getElem?_insert, ne, ite_false]
-  | none => simp only [defined, Std.TreeMap.getElem?_erase, ne, ite_false]
-
-/-- A table of definitions' edits: one definition, or all. -/
-inductive CellsEdit where
-  | set (c : CellId) (definition : Option Value)
-  | all (cells : Std.TreeMap CellId Value)
-
-def CellsEdit.apply : CellsEdit → Std.TreeMap CellId Value → Std.TreeMap CellId Value
-  | .set c v, cells => defined cells c v
-  | .all new, _ => new
-
 /-- What a model's edit does to its definitions. -/
 def Edit.cells? : Edit → List CellsEdit
   | .change (.cell c v) => [.set c v]
@@ -475,7 +453,7 @@ def stops (lines : List Line) : List (Spot × Occ) :=
 namespace Layout
 
 /-- The document's layout, worked out from nothing. -/
-def of (m : Model) : Layout := ⟨Display.lines m.doc m.seen⟩
+def of (m : Model) : Layout := ⟨Derived.docLines m.doc m.seen⟩
 
 def lineCount (l : Layout) : Nat := l.parts.foldl (fun n p => n + p.length) 0
 

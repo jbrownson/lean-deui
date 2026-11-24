@@ -314,6 +314,14 @@ end
 
 variable {cc : EditStructure}
 
+/-- The frames' edits for a new way of drawing and a run of edits of the
+tree: the stale nodes drawn again, unless the new way is the old, then the
+tree's edits as the frames'. -/
+def redraw (own' : L → Fit.Doc S) (stale : L → Bool) (calm : Bool) (t : Tree L) (es : List (Edit L)) :
+    List (Fit.Edit S) :=
+  let after := lift.run (framed own') es t
+  if calm then after else refresh own' stale t ++ after
+
 /-- A tree's frames, as an incremental function of a context and the tree.
 `prepare` works out once what an edit of the context is; `stale` says
 from that whether the edit could change a node's own doc, and `calm`
@@ -323,12 +331,7 @@ nodes again, and walks the rest. -/
 def drawn {P : Type} (own : cc.Value → L → Fit.Doc S) (prepare : cc.Value → cc.Edit → P) (stale : P → L → Bool)
     (calm : cc.Value → cc.Edit → Bool) : Inc (prod cc (runs (edits L))) (runs (Fit.edits S)) where
   f a := frame (own a.1) a.2
-  df a d :=
-    let after := lift.run (framed (own (cc.apply d.1 a.1))) d.2 a.2
-    if calm a.1 d.1 then after
-    else
-      let prepared := prepare a.1 d.1
-      refresh (own (cc.apply d.1 a.1)) (stale prepared) a.2 ++ after
+  df a d := redraw (own (cc.apply d.1 a.1)) (stale (prepare a.1 d.1)) (calm a.1 d.1) a.2 d.2
 
 /-- Drawing under a context is right, if a calm edit changes no node's
 doc, and an edit changes only the docs of nodes it makes stale. -/
@@ -340,7 +343,7 @@ theorem drawn_ok {P : Type} (own : cc.Value → L → Fit.Doc S) (prepare : cc.V
   intro a d
   have after := lift_ok (framed (S := S) (own (cc.apply d.1 a.1))) (framed_ok _) a.2 d.2
   show run (Fit.edits S) _ (frame (own a.1) a.2) = frame (own (cc.apply d.1 a.1)) (run (edits L) d.2 a.2)
-  simp only [drawn]
+  simp only [drawn, redraw]
   cases hc : calm a.1 d.1 with
   | true =>
     have same : own (cc.apply d.1 a.1) = own a.1 := funext fun l => hcalm a.1 d.1 l hc

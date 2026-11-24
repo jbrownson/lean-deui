@@ -88,8 +88,7 @@ module does.
   to that. A node drawn from what its keys look up is stale when an edit
   touches one of its keys (`reading_touched`); nothing is recorded while
   drawing; `reading2` is the same for a node that reads through a first
-  answer to a second. `Progred/Derived/` builds Progred's view on it,
-  beside the view as it is; `docs/progred-port.md` says how far it's got.
+  answer to a second. Progred's view is built on it (`Progred/Derived/`).
 - `App.lean`: an app: a state, a `Cached` view from runs of its edits to
   runs of the scene's, and handlers, from the state and what a press hit,
   a key, text typed or the wheel, to edits; a handler also reads what the
@@ -139,21 +138,26 @@ version does, what this one decides, and what isn't here yet.
   with the Rust version's cell ids, and the built-in library names them and
   holds the functions Lean supplies.
 - `GidText.lean`: documents as text files; the Rust version's files read.
-- `Layout.lean`, `Display.lean`: the projection. A value is drawn by the
-  form of its kind (text, numbers, notebook, section, evaluation, lambda,
-  call, value wrapper), the generic `kind name {fields}`, else raw, in
-  characters, on one line where it fits a ribbon, else stacked. Each value
-  is one frame, with the values inside it as its kids, and a frame is
-  drawn from little: its value without what's inside its elements and
-  fields, the definitions it looks up, and what of the selection is at
-  it. Every drawn thing is an occurrence, which its spans carry, so
-  selections, keys and clicks find their place. The document is drawn in
-  parts, an entry of the root notebook each.
-- `Writes.lean`, `Regrow.lean`: what a change does to a part's frames. A
-  write within a value, and a selection that changes, are each followed
-  down to where they land; a frame on the way that sees what it saw is
-  left as it is, and one that sees something new is drawn again with the
-  kids it had (`rewrite_ok`, `reselect_ok`).
+- `Layout.lean`, `Display.lean`, `Derived/Forms.lean`: the projection. A
+  value is drawn by the form of its kind (text, numbers, notebook,
+  section, evaluation, lambda, call, value wrapper), the generic
+  `kind name {fields}`, else raw, in characters, on one line where it fits
+  a ribbon, else stacked. Every drawn thing is an occurrence, which its
+  spans carry, so selections, keys and clicks find their place. The
+  document is drawn in parts, an entry of the root notebook each.
+  `Display.lean` has what the editor's state and a part are, and the
+  forms the view was first grown from, which `progred_derived` checks the
+  forms it's drawn by now against.
+- `Writes.lean`, `Derived/`: a part of the document, drawn by derivative.
+  A part's value is a tree that mirrors it (`Derived/Tree.lean`), each
+  node labelled with its path, how its place asks it to be drawn, and its
+  value without what's inside. A write is an edit of the tree where it
+  lands (`rewrite_ok`). A cell drawn open has its definition's tree hung
+  under it (`Derived/Links.lean`, `treed_ok`). A form draws a node's own
+  doc from its label, the definitions its keys look up, and the selection
+  where it's at the node or a step in (`Derived/Forms.lean`); so an edit
+  draws again the nodes that could show it, and no others. `part_ok` is
+  the law of a part's lines (`Derived/Part.lean`).
 - `Model.lean`, `Editing.lean`: the editor: selection, navigation by what's
   drawn, holes answered by offers as you type, lines typed in place, and
   undo, which is the changes that take a step back (`back_ok`).
@@ -189,13 +193,13 @@ kind. `examples/projections.gid` has one of each: a fraction, and a bar as
 long as its amount.
 
 On a notebook of 3,300 lines in 300 entries (`progred_measure 300`): the
-wheel takes about 25 µs, an arrow key 50 µs, a keystroke of typing 0.2 to
-0.35 ms, an element added or taken away or an undo up to 0.6 ms, and
-writing a definition that a tenth of the entries reach 4 ms, against 20 ms
-to lay the document out from nothing. On the same entries as one part, a
-list at the root (`progred_measure 300 one`): an arrow key 50 µs and a
-keystroke 0.5 to 0.6 ms; before a part's layout had a derivative, each
-took a third of a second.
+wheel takes about 25 µs, an arrow key 55 µs, a keystroke of typing 0.1 to
+0.3 ms, an element added or taken away up to 0.4 ms, a function added
+1.2 ms, and writing a definition that a tenth of the entries reach 6 ms,
+against 21 ms to lay the document out from nothing. On the same entries
+as one part, a list at the root (`progred_measure 300 one`): an arrow key
+50 µs, a keystroke 1.2 ms, a function added 2 ms. `docs/progred-port.md`
+says what each of those is made of, and what's owed.
 
 Keys: Tab and Shift+Tab go to the next and previous place a value can go;
 type to fill it, and Return takes the chosen offer (Up and Down choose).
@@ -221,8 +225,7 @@ lake build progred_play && .lake/build/bin/progred_play # plays keys through Pro
 .lake/build/bin/progred_play '<tab> note <enter> eva <enter> add <enter> 1 <enter> <tab> 2 <enter>' # or keys of your own
 .lake/build/bin/progred examples/projections.gid        # kinds drawn by projections in the document
 lake build progred_measure && .lake/build/bin/progred_measure 300  # what events cost, on a notebook of 300 entries
-lake build progred_derived && .lake/build/bin/progred_derived 300  # the view by derivative, timed against the view as it is
-.lake/build/bin/progred_derived where examples/tour.gid            # which parts the two draw the same, and where they part ways
+lake build progred_derived && .lake/build/bin/progred_derived where examples/tour.gid  # the forms the view is drawn by, against the ones it was first grown from
 ```
 
 Lean comes from [elan](https://github.com/leanprover/elan), at the version

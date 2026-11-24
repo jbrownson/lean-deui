@@ -69,7 +69,7 @@ lean_exe progred where
 lean_exe progred_measure where
   root := `Spike.Measure
 
-/-- The view by derivative, beside the view as it is: which parts of a
-file the two draw the same, and what the same edits cost through each. -/
+/-- The forms the view is drawn by, against the ones it was first grown
+from: which parts of a file the two draw the same. -/
 lean_exe progred_derived where
   root := `Spike.Derived

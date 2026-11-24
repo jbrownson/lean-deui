@@ -1,5 +1,5 @@
 import Progred.Derived.Tree
-import Progred.Model
+import Progred.Cells
 
 /-!
 A value's tree, hung with definitions: under a cell that's drawn open, its
@@ -109,9 +109,6 @@ def linked (ln : Links) : Nat → Path → Hint → CellId → List (Tree Label)
 /-- How many definitions in a tree goes: more than cells are opened
 inside one another. -/
 def follows : Nat := 32
-
-/-- A value's tree, hung with definitions. -/
-def grown (ln : Links) (path : Path) (hint : Hint) (v : Value) : Tree Label := tree (linked ln follows) path hint v
 
 /-! ## Links made again -/
 
@@ -337,90 +334,125 @@ abbrev Under : EditStructure := prod (latest Display.Seen) (runs cellsEdits)
 
 def links (u : Under.Value) : Links := ⟨u.2, u.1.folds⟩
 
-/-- A run of writes, as the value after and the edits of its tree. -/
-def rewrites (hang : Path → Hint → CellId → List (Tree Label)) (path : Path) (hint : Hint) :
-    List (List Step × Option Value) → Value → List (Tree.Edit Label) × Value
-  | [], v => ([], v)
-  | w :: ws, v =>
-    match rewrite hang path hint v w.1 w.2 with
-    | some (v', es) =>
-      let rest := rewrites hang path hint ws v'
-      (es ++ rest.1, rest.2)
-    | none => rewrites hang path hint ws v
+/-- What a tree is of: where it starts, how the value there is drawn, and
+the value. -/
+structure Seed where
+  path : Path
+  hint : Hint
+  value : Value
 
-theorem rewrites_ok (hang : Path → Hint → CellId → List (Tree Label)) (path : Path) (hint : Hint) :
-    ∀ (ws : List (List Step × Option Value)) (v : Value),
-      (rewrites hang path hint ws v).2 = run Writes ws v ∧
-        run (Tree.edits Label) (rewrites hang path hint ws v).1 (tree hang path hint v) =
-          tree hang path hint (run Writes ws v)
+/-- An edit of what a tree is of: another altogether, or a write in its
+value. -/
+inductive Seed.Edit where
+  | replace (seed : Seed)
+  | write (rel : List Step) (w : Option Value)
+
+def Seed.Edit.apply : Seed.Edit → Seed → Seed
+  | .replace seed, _ => seed
+  | .write rel w, seed => { seed with value := seed.value.written rel w }
+
+abbrev Seeds : EditStructure := ⟨Seed, Seed.Edit, Seed.Edit.apply⟩
+
+/-- A seed's tree, hung with definitions. -/
+def Seed.tree (hang : Path → Hint → CellId → List (Tree Label)) (seed : Seed) : Tree Label :=
+  Derived.tree hang seed.path seed.hint seed.value
+
+/-- A run of edits of a seed, as the seed after and the edits of its tree:
+a write where it lands, another seed as its tree. -/
+def reseeds (hang : Path → Hint → CellId → List (Tree Label)) :
+    List Seed.Edit → Seed → List (Tree.Edit Label) × Seed
+  | [], seed => ([], seed)
+  | .replace seed' :: es, _ =>
+    let rest := reseeds hang es seed'
+    (.replace (seed'.tree hang) :: rest.1, rest.2)
+  | .write rel w :: es, seed =>
+    match rewrite hang seed.path seed.hint seed.value rel w with
+    | some (v', ed) =>
+      let rest := reseeds hang es { seed with value := v' }
+      (ed ++ rest.1, rest.2)
+    | none => reseeds hang es seed
+
+theorem reseeds_ok (hang : Path → Hint → CellId → List (Tree Label)) :
+    ∀ (es : List Seed.Edit) (seed : Seed),
+      (reseeds hang es seed).2 = run Seeds es seed ∧
+        run (Tree.edits Label) (reseeds hang es seed).1 (seed.tree hang) = (run Seeds es seed).tree hang
   | [], _ => ⟨rfl, rfl⟩
-  | w :: ws, v => by
-    have h := rewrite_ok hang w.1 path hint v w.2
-    have e : run Writes (w :: ws) v = run Writes ws (v.written w.1 w.2) := rfl
+  | .replace seed' :: es, seed => by
+    obtain ⟨r1, r2⟩ := reseeds_ok hang es seed'
+    exact ⟨r1, r2⟩
+  | .write rel w :: es, seed => by
+    have h := rewrite_ok hang rel seed.path seed.hint seed.value w
+    have e : run Seeds (.write rel w :: es) seed = run Seeds es { seed with value := seed.value.written rel w } := rfl
     rw [e]
-    simp only [rewrites]
-    cases hr : rewrite hang path hint v w.1 w.2 with
+    simp only [reseeds]
+    cases hr : rewrite hang seed.path seed.hint seed.value rel w with
     | none =>
       rw [hr] at h
-      have same : v.written w.1 w.2 = v := by simp [Value.written, h]
+      have same : seed.value.written rel w = seed.value := by simp [Value.written, h]
       rw [same]
-      exact rewrites_ok hang path hint ws v
+      exact reseeds_ok hang es seed
     | some made =>
-      obtain ⟨v', es⟩ := made
+      obtain ⟨v', ed⟩ := made
       rw [hr] at h
-      have to : v.written w.1 w.2 = v' := by simp [Value.written, h.1]
+      have to : seed.value.written rel w = v' := by simp [Value.written, h.1]
       rw [to]
-      obtain ⟨r1, r2⟩ := rewrites_ok hang path hint ws v'
+      obtain ⟨r1, r2⟩ := reseeds_ok hang es { seed with value := v' }
       refine ⟨r1, ?_⟩
-      show run (Tree.edits Label) (es ++ _) _ = _
-      rw [run_append, h.2, r2]
+      show run (Tree.edits Label) (ed ++ _) _ = _
+      rw [run_append]
+      have step : run (Tree.edits Label) ed (seed.tree hang) = ({ seed with value := v' } : Seed).tree hang := h.2
+      rw [step, r2]
 
 /-- Whether a run of edits of the definitions writes a cell. -/
 def touchedBy (ces : List Model.CellsEdit) (c : CellId) : Bool := ces.any (writes c)
 
-/-- The tree's edits and the value after, for an edit of what it's under
-and a run of writes: its cells relinked, unless neither the definitions
-nor the folds change; then the writes, where they land. -/
-def treed.df (path : Path) (hint : Hint) (u : Under.Value) (v : Value) (t : Tree Label) (d : Under.Edit)
-    (ws : List (List Step × Option Value)) : List (Tree.Edit Label) × Value :=
-  let u' := Under.apply d u
+/-- The tree's edits and the seed after, for an edit of what it's under
+and a run of edits of the seed: its cells relinked, unless neither the
+definitions nor the folds change; then the seed's edits. `u'` is what
+it's under after the edit, which whoever asks has worked out. -/
+def treed.dfWith (u' u : Under.Value) (seed : Seed) (t : Tree Label) (d : Under.Edit) (es : List Seed.Edit) :
+    List (Tree.Edit Label) × Seed :=
   let first :=
     if d.2.isEmpty && decide (d.1.folds = u.1.folds) then []
     else relinkTree (relinkCell (links u) (links u') (touchedBy d.2) follows) t
-  let made := rewrites (linked (links u') follows) path hint ws v
+  let made := reseeds (linked (links u') follows) es seed
   (first ++ made.1, made.2)
 
-/-- A value's tree hung with definitions, as an incremental function of
-what it's under and the value. It keeps them, and the tree. -/
-def treed (path : Path) (hint : Hint) : Cached (prod Under (runs Writes)) (runs (Tree.edits Label)) where
-  Cache := Under.Value × Value × Tree Label
-  f a := (grown (links a.1) path hint a.2, (a.1, a.2, grown (links a.1) path hint a.2))
+/-- With what it's under after the edit worked out here. -/
+def treed.df (u : Under.Value) (seed : Seed) (t : Tree Label) (d : Under.Edit) (es : List Seed.Edit) :
+    List (Tree.Edit Label) × Seed :=
+  treed.dfWith (Under.apply d u) u seed t d es
+
+/-- A seed's tree hung with definitions, as an incremental function of
+what it's under and the seed. It keeps them, and the tree. -/
+def treed : Cached (prod Under (runs Seeds)) (runs (Tree.edits Label)) where
+  Cache := Under.Value × Seed × Tree Label
+  f a := (a.2.tree (linked (links a.1) follows), (a.1, a.2, a.2.tree (linked (links a.1) follows)))
   df k d :=
-    let made := treed.df path hint k.1 k.2.1 k.2.2 d.1 d.2
+    let made := treed.df k.1 k.2.1 k.2.2 d.1 d.2
     (made.1, (Under.apply d.1 k.1, made.2, run (Tree.edits Label) made.1 k.2.2))
 
-theorem treed_df_ok (path : Path) (hint : Hint) (u : Under.Value) (v : Value) (d : Under.Edit)
-    (ws : List (List Step × Option Value)) :
-    (treed.df path hint u v (grown (links u) path hint v) d ws).2 = run Writes ws v ∧
-      run (Tree.edits Label) (treed.df path hint u v (grown (links u) path hint v) d ws).1
-          (grown (links u) path hint v) =
-        grown (links (Under.apply d u)) path hint (run Writes ws v) := by
-  obtain ⟨r1, r2⟩ := rewrites_ok (linked (links (Under.apply d u)) follows) path hint ws v
+theorem treed_df_ok (u : Under.Value) (seed : Seed) (d : Under.Edit) (es : List Seed.Edit) :
+    (treed.df u seed (seed.tree (linked (links u) follows)) d es).2 = run Seeds es seed ∧
+      run (Tree.edits Label) (treed.df u seed (seed.tree (linked (links u) follows)) d es).1
+          (seed.tree (linked (links u) follows)) =
+        (run Seeds es seed).tree (linked (links (Under.apply d u)) follows) := by
+  obtain ⟨r1, r2⟩ := reseeds_ok (linked (links (Under.apply d u)) follows) es seed
   refine ⟨r1, ?_⟩
-  simp only [treed.df]
+  simp only [treed.df, treed.dfWith]
   rw [run_append]
   have first : run (Tree.edits Label)
       (if d.2.isEmpty && decide (d.1.folds = u.1.folds) then []
         else relinkTree (relinkCell (links u) (links (Under.apply d u)) (touchedBy d.2) follows)
-          (grown (links u) path hint v)) (grown (links u) path hint v) =
-      grown (links (Under.apply d u)) path hint v := by
+          (seed.tree (linked (links u) follows))) (seed.tree (linked (links u) follows)) =
+      seed.tree (linked (links (Under.apply d u)) follows) := by
     cases hc : (d.2.isEmpty && decide (d.1.folds = u.1.folds)) with
     | true =>
       obtain ⟨h1, h2⟩ : d.2 = [] ∧ d.1.folds = u.1.folds := by simpa using hc
       obtain ⟨seen, cells⟩ := u
       obtain ⟨seen', ces⟩ := d
       cases h1
-      show grown ⟨cells, seen.folds⟩ path hint v = grown ⟨cells, seen'.folds⟩ path hint v
+      show seed.tree (linked ⟨cells, seen.folds⟩ follows) = seed.tree (linked ⟨cells, seen'.folds⟩ follows)
       rw [h2]
     | false =>
       simp only [Bool.false_eq_true, ite_false]
@@ -428,15 +460,15 @@ theorem treed_df_ok (path : Path) (hint : Hint) (u : Under.Value) (v : Value) (d
         (relinkCell_ok (links u) (links (Under.apply d u)) (touchedBy d.2)
           (fun c hc => by
             show ((run cellsEdits d.2 u.2)[c]?).orElse _ = (u.2[c]?).orElse _
-            rw [cells_untouched d.2 u.2 c hc]) follows) v path hint
+            rw [cells_untouched d.2 u.2 c hc]) follows) seed.value seed.path seed.hint
   rw [first]
   exact r2
 
-theorem treed_ok (path : Path) (hint : Hint) : (treed path hint).ok := by
+theorem treed_ok : treed.ok := by
   intro a d
-  obtain ⟨h1, h2⟩ := treed_df_ok path hint a.1 a.2 d.1 d.2
-  show (run (Tree.edits Label) _ (grown (links a.1) path hint a.2), _) =
-    (grown (links (Under.apply d.1 a.1)) path hint (run Writes d.2 a.2), _)
+  obtain ⟨h1, h2⟩ := treed_df_ok a.1 a.2 d.1 d.2
+  show (run (Tree.edits Label) _ (a.2.tree (linked (links a.1) follows)), _) =
+    ((run Seeds d.2 a.2).tree (linked (links (Under.apply d.1 a.1)) follows), _)
   simp only [treed, h1, h2]
   rfl
 

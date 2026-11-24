@@ -11,7 +11,6 @@ keys and no others (`Tree.reading2`): the cells its own value names, and
 the cells their definitions name. So a definition written draws again the
 nodes with that key, and that needs no proof form by form.
 
-Not here yet: errors marked.
 -/
 
 open Deui
@@ -26,6 +25,9 @@ expression gave; for a record of a kind a function may draw, what
 functions gave for it. -/
 structure View where
   selection : Option Selection := none
+  /-- The values an evaluation's error is about, of the node's own and
+  those a step in. -/
+  failing : List Path := []
   outcome : Option Outcome := none
   /-- The function, the record, and its layout. -/
   layouts : List (Value × Value × Value) := []
@@ -33,7 +35,7 @@ structure View where
 
 section forms
 
-variable (look : CellId → Option Value) (sel : Option Selection)
+variable (look : CellId → Option Value) (w : View)
 
 /-- A cell's name, if its definition has one that isn't empty. -/
 def name? (c : CellId) : Option String :=
@@ -43,42 +45,43 @@ def name? (c : CellId) : Option String :=
 
 def shown (c : CellId) : String := (name? look c).getD c.short
 
+/-- A doc, as an occurrence: a value an error is about is marked so. -/
 def occ (path : Path) (kind : OccKind) (d : Doc) (cell : Option CellId := none) : Doc :=
-  Doc.marked ⟨path, kind, false, cell⟩ d
+  Doc.marked ⟨path, kind, kind == .value && w.failing.contains path, cell⟩ d
 
 /-- The editing at a path, if the selection is typing there in `stage`. -/
 def editingAt (path : Path) (stage : Stage) : Option Editing :=
-  match sel with
+  match w.selection with
   | some s => if s.path == path && s.stage == stage then s.editing else none
   | none => none
 
 /-- Whether a pending selection sits at a path. -/
 def pendingAt (path : Path) : Bool :=
-  match sel with
+  match w.selection with
   | some s => s.path == path && s.stage == .pending
   | none => false
 
 /-- The step a pending selection is at, one step in from a path. -/
 def pendingIn (path : Path) : Option Step :=
-  match sel with
+  match w.selection with
   | some s => if s.stage == .pending && s.path.dropLast == path then s.path.getLast? else none
   | none => none
 
 /-- A hole: a place with no value, or the query being typed into it. -/
 def hole (path : Path) : Doc :=
-  match editingAt sel path .pending with
-  | some e => occ path .hole (.row [Display.typing e .ink])
+  match editingAt w path .pending with
+  | some e => occ w path .hole (.row [Display.typing e .ink])
   | none =>
-    match editingAt sel path .edge with
-    | some e => occ path .hole (.row [Display.typing e .ink])
-    | none => occ path .hole (dim "_")
+    match editingAt w path .edge with
+    | some e => occ w path .hole (.row [Display.typing e .ink])
+    | none => occ w path .hole (dim "_")
 
 /-- A record's name where it has none: `missing`, or what's being typed. -/
 def nameHole (path : Path) (missing : String) : Doc :=
-  match editingAt sel path .edge, editingAt sel path .pending with
-  | some e, _ => occ path .value (Display.typing e .name)
-  | _, some e => occ path .hole (Display.typing e .name)
-  | none, none => occ path .hole (dim missing)
+  match editingAt w path .edge, editingAt w path .pending with
+  | some e, _ => occ w path .value (Display.typing e .name)
+  | _, some e => occ w path .hole (Display.typing e .name)
+  | none, none => occ w path .hole (dim missing)
 
 /-- Where a field's value is among a record's kids. -/
 def slotOf (fields : List (CellId × Value)) (l : CellId) : Option Nat := fields.findIdx? (·.1 == l)
@@ -87,17 +90,17 @@ def slotOf (fields : List (CellId × Value)) (l : CellId) : Option Nat := fields
 def at_ (path : Path) (fields : List (CellId × Value)) (l : CellId) : Doc :=
   match slotOf fields l with
   | some i => .slot i
-  | none => hole sel (path ++ [.key l])
+  | none => hole w (path ++ [.key l])
 
 /-- A record's name: its kid's slot, or `missing` where it has none. -/
 def nameAt (path : Path) (fields : List (CellId × Value)) (missing : String) : Doc :=
   match slotOf fields Kinds.name with
   | some i => .slot i
-  | none => nameHole sel (path ++ [.key Kinds.name]) missing
+  | none => nameHole w (path ++ [.key Kinds.name]) missing
 
 /-- A field: its label, then its value beside it. -/
 def field (path : Path) (fields : List (CellId × Value)) (l : CellId) : Doc :=
-  .row [occ (path ++ [.key l]) .label (t (shown look l) .label) (some l), dim ": ", at_ sel path fields l]
+  .row [occ w (path ++ [.key l]) .label (t (shown look l) .label) (some l), dim ": ", at_ w path fields l]
 
 /-- A record's fields in the order raw shows them: named labels by name,
 then the rest. Each label's name is looked up once. -/
@@ -120,7 +123,7 @@ def cell (opened : Bool) (c : CellId) : Doc :=
     | none => dim c.short
 
 def insertion (path : Path) (before after : Option Position) : Doc :=
-  occ (path ++ [.element (Position.between before after)]) .insertion (point .ink)
+  occ w (path ++ [.element (Position.between before after)]) .insertion (point .ink)
 
 /-- A list's elements, each in its slot, with a place to insert before each
 and after the last. `places` are the positions in order, each with whether
@@ -130,15 +133,15 @@ def elementsFrom (path : Path) : Option (Position × Bool) → List (Position ×
   | _, [], _ => []
   | prev, (p, there) :: rest, i =>
     let beside := !there || (prev.map (·.2)).getD false
-    let point : Doc := if beside then .row [] else insertion path (prev.map (·.1)) (some p)
-    let item : Doc := if there then .slot i else hole sel (path ++ [.element p])
-    let last : Doc := if rest.isEmpty && there then insertion path (some p) none else .row []
+    let point : Doc := if beside then .row [] else insertion w path (prev.map (·.1)) (some p)
+    let item : Doc := if there then .slot i else hole w (path ++ [.element p])
+    let last : Doc := if rest.isEmpty && there then insertion w path (some p) none else .row []
     .row [point, item, last] :: elementsFrom path (some (p, !there)) rest (if there then i + 1 else i)
 
 def elements (path : Path) (items : List (Position × Value)) : List Doc :=
   -- The element being added, if the selection is pending in this list.
   let pending : Option Position :=
-    match pendingIn sel path with
+    match pendingIn w path with
     | some (.element p) => if items.any (·.1 == p) then none else some p
     | _ => none
   let places : List (Position × Bool) :=
@@ -147,36 +150,36 @@ def elements (path : Path) (items : List (Position × Value)) : List Doc :=
       (items.filter fun (q, _) => Position.lt q p).map (fun (q, _) => (q, true)) ++ [(p, false)] ++
         (items.filter fun (q, _) => !Position.lt q p).map fun (q, _) => (q, true)
     | none => items.map fun (q, _) => (q, true)
-  if places.isEmpty then [insertion path none none] else elementsFrom sel path none places 0
+  if places.isEmpty then [insertion w path none none] else elementsFrom w path none places 0
 
 def list (path : Path) (items : List (Position × Value)) : Doc :=
-  let parts := elements sel path items
+  let parts := elements w path items
   container "[" "]" parts parts
 
 /-- The label being typed for a new field, if the selection is adding one
 to the record at a path. -/
 def newLabel (path : Path) : List Doc :=
-  match editingAt sel path .label with
-  | some e => [.row [occ path .fieldEnd (Display.typing e .label), dim ": ", dim "_"]]
+  match editingAt w path .label with
+  | some e => [.row [occ w path .fieldEnd (Display.typing e .label), dim ": ", dim "_"]]
   | none => []
 
 /-- The field whose value is being given, if the selection is pending at a
 field the record at a path doesn't have yet: its label, and the hole. -/
 def pendingField (path : Path) (fields : List (CellId × Value)) : List Doc :=
-  match pendingIn sel path with
-  | some (.key l) => if fields.any (·.1 == l) then [] else [field look sel path fields l]
+  match pendingIn w path with
+  | some (.key l) => if fields.any (·.1 == l) then [] else [field look w path fields l]
   | _ => []
 
 /-- Whether the selection is at one of some fields of the record at a path. -/
 def selectedAmong (path : Path) (labels : List CellId) : Bool :=
-  labels.any fun l => sel.any fun s => s.path == path ++ [.key l]
+  labels.any fun l => w.selection.any fun s => s.path == path ++ [.key l]
 
 /-- A raw record: `{label: value, …}`, with a place at its end to add a
 field. -/
 def record (path : Path) (fields : List (CellId × Value)) : Doc :=
-  let adding := pendingField look sel path fields ++ newLabel sel path
-  let parts := ((ordered look fields).map fun (l, _) => field look sel path fields l) ++ adding
-  let end_ := if adding.isEmpty then [occ path .fieldEnd (point .ink)] else []
+  let adding := pendingField look w path fields ++ newLabel w path
+  let parts := ((ordered look fields).map fun (l, _) => field look w path fields l) ++ adding
+  let end_ := if adding.isEmpty then [occ w path .fieldEnd (point .ink)] else []
   let flat : Doc := .row ([delim "{"] ++ Doc.sep (dim ", ") parts ++ end_ ++ [delim "}"])
   -- Stacked, the place to add a field rides at the end of the last field's line.
   let lines : List Doc := match parts.reverse with
@@ -199,10 +202,10 @@ def kinded (path : Path) (k : CellId) (fields : List (CellId × Value)) : Doc :=
   let hasName := (fieldsOf look k).contains Kinds.name || (slotOf fields Kinds.name).isSome
   let rest := (ordered look fields).filter fun (l, _) =>
     l != Kinds.isa && l != Kinds.name && !declared.contains l
-  let pending := if selectedAmong sel path declared then [] else pendingField look sel path fields
-  let parts := declared.map (field look sel path fields) ++ (rest.map fun (l, _) => field look sel path fields l) ++
-    pending ++ newLabel sel path
-  let name := if hasName then [t " ", nameAt sel path fields "name"] else []
+  let pending := if selectedAmong w path declared then [] else pendingField look w path fields
+  let parts := declared.map (field look w path fields) ++ (rest.map fun (l, _) => field look w path fields l) ++
+    pending ++ newLabel w path
+  let name := if hasName then [t " ", nameAt w path fields "name"] else []
   let head := [t (shown look k) .name] ++ name
   let flat : Doc := .row (head ++ [delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
   let stacked : Doc := .col [.row (head ++ [delim " {"]), .indent 2 (.col parts), delim "}"]
@@ -211,34 +214,34 @@ def kinded (path : Path) (k : CellId) (fields : List (CellId × Value)) : Doc :=
 /-- A notebook: its entries; one with no list of them, as a field. -/
 def notebook (path : Path) (fields : List (CellId × Value)) : Doc :=
   match (Value.record fields).field? Kinds.entries with
-  | some (.list _) => at_ sel path fields Kinds.entries
-  | _ => .row [t "notebook " .name, field look sel path fields Kinds.entries]
+  | some (.list _) => at_ w path fields Kinds.entries
+  | _ => .row [t "notebook " .name, field look w path fields Kinds.entries]
 
 /-- A section: its name over its body, indented. -/
 def section_ (path : Path) (fields : List (CellId × Value)) : Doc :=
-  .col [.row [dim "▾ ", nameAt sel path fields "section"], .indent 2 (at_ sel path fields Kinds.sectionBody)]
+  .col [.row [dim "▾ ", nameAt w path fields "section"], .indent 2 (at_ w path fields Kinds.sectionBody)]
 
 /-- An evaluation: its expression, then what it gives. -/
 def evaluation (path : Path) (fields : List (CellId × Value)) (outcome : Option Outcome) : Doc :=
-  let expression := at_ sel path fields Kinds.expression
+  let expression := at_ w path fields Kinds.expression
   let result : Doc :=
     match outcome with
     | some (.value shown type) =>
       if shown.isEmpty then .row [t type .dim] else .row [t shown .result, t (" : " ++ type) .dim]
     | some (.failed message _) => t (Display.brief message) .error
     | none => dim "…"
-  let marked := occ (path ++ [.key Kinds.evaluation]) .computed result
+  let marked := occ w (path ++ [.key Kinds.evaluation]) .computed result
   .alt (.row [expression, dim " → ", marked]) (.col [expression, .indent 2 (.row [dim "→ ", marked])])
 
 /-- A lambda: `name [params] → body`, with what it returns after the
 parameters if it says, or is being told. -/
 def lambda (path : Path) (fields : List (CellId × Value)) : Doc :=
   let returns :=
-    if (slotOf fields Kinds.returns).isSome || pendingAt sel (path ++ [.key Kinds.returns]) then
-      [dim " : ", at_ sel path fields Kinds.returns]
+    if (slotOf fields Kinds.returns).isSome || pendingAt w (path ++ [.key Kinds.returns]) then
+      [dim " : ", at_ w path fields Kinds.returns]
     else []
-  let body := at_ sel path fields Kinds.body
-  let head := [nameAt sel path fields "λ", t " ", at_ sel path fields Kinds.params] ++ returns
+  let body := at_ w path fields Kinds.body
+  let head := [nameAt w path fields "λ", t " ", at_ w path fields Kinds.params] ++ returns
   .alt (.row (head ++ [dim " → ", body])) (.col [.row (head ++ [dim " →"]), .indent 2 body])
 
 /-- A call: the function, then its arguments by parameter; a function
@@ -254,15 +257,15 @@ def call (path : Path) (fields : List (CellId × Value)) : Doc :=
     | _ => none
   match symbol, params with
   | some sym, [a, b] =>
-    let op := occ (path ++ [.key Kinds.function]) .value (dim (" " ++ sym ++ " "))
-    .row [delim "(", at_ sel path fields a, op, at_ sel path fields b, delim ")"]
+    let op := occ w (path ++ [.key Kinds.function]) .value (dim (" " ++ sym ++ " "))
+    .row [delim "(", at_ w path fields a, op, at_ w path fields b, delim ")"]
   | _, _ =>
-    let head := at_ sel path fields Kinds.function
+    let head := at_ w path fields Kinds.function
     let extra := (ordered look fields).filter fun (l, _) =>
       l != Kinds.isa && l != Kinds.function && !params.contains l
-    let pending := if selectedAmong sel path params then [] else pendingField look sel path fields
-    let parts := params.map (field look sel path fields) ++ (extra.map fun (l, _) => field look sel path fields l) ++
-      pending ++ newLabel sel path
+    let pending := if selectedAmong w path params then [] else pendingField look w path fields
+    let parts := params.map (field look w path fields) ++ (extra.map fun (l, _) => field look w path fields l) ++
+      pending ++ newLabel w path
     let flat : Doc := .row ([head, delim " {"] ++ Doc.sep (dim ", ") parts ++ [delim "}"])
     let stacked : Doc := .col [.row [head, delim " {"], .indent 2 (.col parts), delim "}"]
     if parts.isEmpty then .row [head, delim " {}"] else .alt flat stacked
@@ -279,7 +282,7 @@ partial def layout (path : Path) (fields : List (CellId × Value)) : Node → Do
     | last :: before => before.foldl (fun rest d => .alt d rest) last
   | .words content => t content
   | .faint content => dim content
-  | .part field => at_ sel path fields field
+  | .part field => at_ w path fields field
 
 /-- The layout a kind's records are drawn with, for a record: its def's
 projection, if that's a layout, or a function that has given this record
@@ -298,11 +301,11 @@ def projection (layouts : List (Value × Value × Value)) (k : CellId) : Option 
   | none => none
 
 /-- A value, by the first form that takes it. -/
-def drawn (w : View) (l : Label) : Doc :=
+def drawn (l : Label) : Doc :=
   match l.value with
   | .cell c => cell look l.opened c
   | .blob b => t (GidText.hex b) .number
-  | .list items => list sel l.path items
+  | .list items => list w l.path items
   | .record fields =>
     let v := l.value
     if (v.text?.isSome || v.u64?.isSome || v.f64?.isSome) && fields.length == 2 then Display.line v none
@@ -311,89 +314,91 @@ def drawn (w : View) (l : Label) : Doc :=
     else
       match v.kind? with
       | some k =>
-        if k == Kinds.notebook then notebook look sel l.path fields
-        else if k == Kinds.section_ then section_ sel l.path fields
+        if k == Kinds.notebook then notebook look w l.path fields
+        else if k == Kinds.section_ then section_ w l.path fields
         else if k == Kinds.evaluation then
-          evaluation sel l.path fields
+          evaluation w l.path fields
             w.outcome
-        else if k == Kinds.lambda then lambda sel l.path fields
-        else if k == Kinds.call then call look sel l.path fields
+        else if k == Kinds.lambda then lambda w l.path fields
+        else if k == Kinds.call then call look w l.path fields
         else if k == Kinds.valueWrapper then
-          .row [nameAt sel l.path fields "name", t " = ", at_ sel l.path fields Kinds.value]
+          .row [nameAt w l.path fields "name", t " = ", at_ w l.path fields Kinds.value]
         else
           match projection look w.layouts k with
-          | some node => layout sel l.path fields node
-          | none => kinded look sel l.path k fields
-      | none => record look sel l.path fields
+          | some node => layout w l.path fields node
+          | none => kinded look w l.path k fields
+      | none => record look w l.path fields
 
 /-- A value at its path, as an occurrence; one being typed over shows
 what's typed in its place: a picker's query, or its own line. -/
-def value (w : View) (l : Label) : Doc :=
+def value (l : Label) : Doc :=
   let cell := match l.value with
     | .cell c => some c
     | _ => none
-  match editingAt sel l.path .edge with
+  match editingAt w l.path .edge with
   | some e =>
-    if e.picker then occ l.path .value (.row [Display.typing e .ink]) cell
-    else occ l.path .value (Display.line l.value (some e)) cell
-  | none => occ l.path .value (drawn look sel w l) cell
+    if e.picker then occ w l.path .value (.row [Display.typing e .ink]) cell
+    else occ w l.path .value (Display.line l.value (some e)) cell
+  | none => occ w l.path .value (drawn look w l) cell
 
 /-- The hole of an entry being added before the entry at a path, or at the
 entries' end for their path: the selection is pending and anchored there. -/
 def adding (at_ : Path) : Option Path :=
-  match sel with
+  match w.selection with
   | some s => if s.stage == .pending && s.anchor == some at_ then some s.path else none
   | none => none
 
 /-- A node's own doc, as its place asks. -/
-def shape (w : View) (l : Label) : Doc :=
+def shape (l : Label) : Doc :=
   match l.hint with
-  | .value _ => value look sel w l
+  | .value _ => value look w l
   | .name missing =>
     let bare (e : Option Editing) (shown : String) : Doc :=
       match e with
       | some e => Display.typing e .name
       | none => t shown .name
-    match editingAt sel l.path .edge, editingAt sel l.path .pending with
-    | some e, _ => occ l.path .value (bare (some e) "")
-    | _, some e => occ l.path .hole (bare (some e) "")
+    match editingAt w l.path .edge, editingAt w l.path .pending with
+    | some e, _ => occ w l.path .value (bare (some e) "")
+    | _, some e => occ w l.path .hole (bare (some e) "")
     | none, none =>
       match l.value.text? with
-      | some n => if n.isEmpty then occ l.path .value (dim missing) else occ l.path .value (bare none n)
-      | none => occ l.path .hole (dim missing)
+      | some n => if n.isEmpty then occ w l.path .value (dim missing) else occ w l.path .value (bare none n)
+      | none => occ w l.path .hole (dim missing)
   | .param =>
-    match l.value, editingAt sel l.path .edge with
+    match l.value, editingAt w l.path .edge with
     | .cell c, none =>
-      occ l.path .value (.row [t (shown look c) .name, if l.opened then .slot 0 else .row []]) (some c)
-    | _, _ => value look sel w l
+      occ w l.path .value (.row [t (shown look c) .name, if l.opened then .slot 0 else .row []]) (some c)
+    | _, _ => value look w l
   | .entries =>
     match l.value with
     | .list items =>
-      let parts := elements sel l.path items
+      let parts := elements w l.path items
       let numbered := (List.range parts.length).zip parts |>.map fun (i, d) =>
         (.row [dim (toString (i + 1) ++ (if i < 9 then "  " else " ")), d] : Doc)
       .col (Doc.sep (t "") numbered)
-    | _ => value look sel w l
+    | _ => value look w l
   | .body =>
     match l.value with
-    | .list items => .col (elements sel l.path items)
-    | _ => value look sel w l
+    | .list items => .col (elements w l.path items)
+    | _ => value look w l
   | .entry p =>
-    match adding sel (Display.entryAt p) with
-    | some at_ => .col [hole sel at_, t "", .slot 0, t ""]
-    | none => .col [.row [occ (Display.entryAt p) .entryPoint (point .ink), .slot 0], t ""]
+    match adding w (Display.entryAt p) with
+    | some at_ => .col [hole w at_, t "", .slot 0, t ""]
+    | none => .col [.row [occ w (Display.entryAt p) .entryPoint (point .ink), .slot 0], t ""]
   | .end_ =>
-    match adding sel Display.entriesPath with
-    | some at_ => hole sel at_
-    | none => occ Display.entriesPath .entryPoint (point .ink)
-  | .label => .row []
-  | .params => value look sel w l
+    match adding w Display.entriesPath with
+    | some at_ => hole w at_
+    | none => occ w Display.entriesPath .entryPoint (point .ink)
+  | .label =>
+    -- Where there's no value at all: the root of a document with none.
+    hole w l.path
+  | .params => value look w l
   | .paramType =>
     -- A parameter's definition, as its type: drawn if it has one, or one is being given.
     match l.value with
     | .record fields =>
-      if (slotOf fields Kinds.type_).isSome || pendingAt sel (l.path ++ [.key Kinds.type_]) then
-        .row [dim ": ", at_ sel l.path fields Kinds.type_]
+      if (slotOf fields Kinds.type_).isSome || pendingAt w (l.path ++ [.key Kinds.type_]) then
+        .row [dim ": ", at_ w l.path fields Kinds.type_]
       else .row []
     | _ => .row []
 
@@ -417,7 +422,7 @@ def keys1 (sel : Option Selection) (l : Label) : List CellId :=
     if l.leaf then []
     else
       -- The label of a field being given a value, which the record doesn't hold yet.
-      (match pendingIn sel l.path with
+      (match pendingIn { selection := sel } l.path with
         | some (.key k) => [k]
         | _ => []) ++
       fields.map (·.1) ++ fields.filterMap fun (_, x) => match x with | .cell c => some c | _ => none
@@ -520,9 +525,14 @@ def layoutsFor (layouts : List (Value × Value × Value)) (l : Label) : List (Va
   | some v => if v.kind? == some Kinds.evaluation then [] else layouts.filter (·.2.1 == v)
   | none => []
 
+/-- The values errors are about, as a node sees them: its own, and those a
+step in, which it may draw a mark for. -/
+def failingFor (failing : List Path) (l : Label) : List Path :=
+  failing.filter fun p => p == l.path || stepIn p l.path
+
 /-- What a node sees of what a part is drawn with. -/
 def view (seen : Display.Seen) (l : Label) : View :=
-  ⟨seenBy l seen.selection, outcomeFor seen.results l, layoutsFor seen.layouts.val l⟩
+  ⟨seenBy l seen.selection, failingFor seen.failing l, outcomeFor seen.results l, layoutsFor seen.layouts.val l⟩
 
 /-- What an edit of what a part is drawn under is, worked out once for a
 walk: the states before and after, how deep each one's selection is,
@@ -534,11 +544,12 @@ structure Edited where
   depth : Nat
   depth' : Nat
   same : Bool
+  sameFailing : Bool
   written : Bool
 
 def edited (c : Under.Value) (d : Under.Edit) : Edited :=
   ⟨c, d, depthOf c.1.selection, depthOf d.1.selection,
-    equal d.1.results c.1.results && equal d.1.layouts c.1.layouts, !d.2.isEmpty⟩
+    equal d.1.results c.1.results && equal d.1.layouts c.1.layouts, equal d.1.failing c.1.failing, !d.2.isEmpty⟩
 
 /-- Whether what a node sees could differ across an edit. A node nowhere
 near either selection sees neither; one not drawn from its whole value
@@ -547,6 +558,7 @@ same, no node sees them differ. -/
 def differs (p : Edited) (l : Label) : Bool :=
   ((near p.depth p.before.1.selection l || near p.depth' p.edit.1.selection l) &&
       decide (seenBy l p.edit.1.selection ≠ seenBy l p.before.1.selection)) ||
+    (!p.sameFailing && decide (failingFor p.edit.1.failing l ≠ failingFor p.before.1.failing l)) ||
     (l.deep.isSome && !p.same &&
       (decide (outcomeFor p.edit.1.results l ≠ outcomeFor p.before.1.results l) ||
         decide (layoutsFor p.edit.1.layouts.val l ≠ layoutsFor p.before.1.layouts.val l)))
@@ -557,7 +569,14 @@ theorem same_of_decide {α : Type} [DecidableEq α] (a b : α) (h : decide (a �
 theorem view_of_not_differs (c : Under.Value) (d : Under.Edit) (l : Label) (h : differs (edited c d) l = false) :
     view d.1 l = view c.1 l := by
   simp only [differs, edited, Bool.or_eq_false_iff] at h
-  obtain ⟨hsel, hdeep⟩ := h
+  obtain ⟨⟨hsel, hfail⟩, hdeep⟩ := h
+  have e0 : failingFor d.1.failing l = failingFor c.1.failing l := by
+    cases he : equal d.1.failing c.1.failing with
+    | true => rw [equal_sound _ _ he]
+    | false =>
+      have := hfail
+      simp only [he, Bool.not_false, Bool.true_and] at this
+      exact same_of_decide _ _ this
   have e1 : seenBy l d.1.selection = seenBy l c.1.selection := by
     cases hn : (near (depthOf c.1.selection) c.1.selection l || near (depthOf d.1.selection) d.1.selection l) with
     | false =>
@@ -581,13 +600,13 @@ theorem view_of_not_differs (c : Under.Value) (d : Under.Edit) (l : Label) (h : 
         have := hdeep
         simp only [hd, he, Option.isSome_some, Bool.not_false, Bool.true_and, Bool.or_eq_false_iff] at this
         exact ⟨same_of_decide _ _ this.1, same_of_decide _ _ this.2⟩
-  simp only [view, e1, e23.1, e23.2]
+  simp only [view, e0, e1, e23.1, e23.2]
 
 /-- A node's own doc, from what nodes see by `seen`, under the
 definitions of `u`: it reads those through its keys. -/
 def ownBy (seen : Display.Seen) (u : Under.Value) (l : Label) : Doc :=
   Tree.reading2 get (fun l' => keys1 (seenBy l' seen.selection) l') keys2
-    (fun l' look => shape look (seenBy l' seen.selection) (view seen l') l') u l
+    (fun l' look => shape look (view seen l') l') u l
 
 /-- A node's own doc, under what a part is drawn under. -/
 def own (u : Under.Value) (l : Label) : Doc := ownBy u.1 u l
@@ -600,10 +619,11 @@ def stale (p : Edited) (l : Label) : Bool :=
       Tree.touched2 get touches (fun l' => keys1 (seenBy l' p.before.1.selection) l') keys2 p.before p.edit l)
 
 /-- An edit that changes no doc: it writes no definition, and leaves the
-selection, what evaluations gave and what functions gave as they were. -/
+selection, what evaluations gave, what functions gave and what errors are
+about as they were. -/
 def calm (c : Under.Value) (d : Under.Edit) : Bool :=
   d.2.isEmpty && decide (d.1.selection = c.1.selection) && decide (d.1.results = c.1.results) &&
-    decide (d.1.layouts = c.1.layouts)
+    decide (d.1.layouts = c.1.layouts) && decide (d.1.failing = c.1.failing)
 
 /-- A tree's frames, as an incremental function of what a part is drawn
 under and the tree. -/
@@ -623,9 +643,9 @@ theorem drawn'_ok : drawn'.ok := by
     obtain ⟨seen, cells⟩ := c
     obtain ⟨seen', ces⟩ := d
     simp only [calm, Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff] at hc
-    obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := hc
+    obtain ⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩ := hc
     cases h1
-    have hv : view seen' l = view seen l := by simp only [view, h2, h3, h4]
+    have hv : view seen' l = view seen l := by simp only [view, h2, h3, h4, h5]
     exact ownBy_view seen seen' (seen', cells) l hv
   · intro c d l hs
     simp only [stale, Bool.or_eq_false_iff] at hs
@@ -648,21 +668,45 @@ abbrev Framed : EditStructure := prod (latest Nat) (runs (Fit.edits Span))
 /-- A part's lines, edited line by line. -/
 abbrev Lines : EditStructure := runs (Lists.editStructure (Deui.whole (plain Line)))
 
-/-- The frames of a value at a path, drawn as its place asks. -/
-def framed (path : Path) (hint : Hint) : Cached (prod Under (runs Writes)) Framed :=
-  Cached.carrying (·.1.ribbon) (compose (Cached.keeping (treed path hint)) (cached drawn'))
+/-- A seed's frames within the ribbon, as an incremental function of what
+a part is drawn under and the seed: its tree hung with definitions, and
+each node's own doc. It keeps what it's under, the seed and the tree, and
+works out what it's under after an edit once for both. -/
+def framed : Cached (prod Under (runs Seeds)) Framed where
+  Cache := Under.Value × Seed × Tree Label
+  f a := ((a.1.1.ribbon, Tree.frame (own a.1) (a.2.tree (linked (links a.1) follows))),
+    (a.1, a.2, a.2.tree (linked (links a.1) follows)))
+  df k d :=
+    let u' := Under.apply d.1 k.1
+    let made := treed.dfWith u' k.1 k.2.1 k.2.2 d.1 d.2
+    ((d.1.1.ribbon, Tree.redraw (own u') (stale (edited k.1 d.1)) (calm k.1 d.1) k.2.2 made.1),
+      (u', made.2, run (Tree.edits Label) made.1 k.2.2))
 
-theorem framed_ok (path : Path) (hint : Hint) : (framed path hint).ok :=
-  Cached.carrying_ok _ _ (compose_ok _ _ (Cached.keeping_ok _ (treed_ok path hint)) (cached_ok _ drawn'_ok))
+theorem framed_ok : framed.ok := by
+  intro a d
+  obtain ⟨h1, h2⟩ := treed_df_ok a.1 a.2 d.1 d.2
+  have h3 := drawn'_ok (a.1, a.2.tree (linked (links a.1) follows))
+    (d.1, (treed.df a.1 a.2 (a.2.tree (linked (links a.1) follows)) d.1 d.2).1)
+  have h3' : run (Fit.edits Span)
+      (Tree.redraw (own (Under.apply d.1 a.1)) (stale (edited a.1 d.1)) (calm a.1 d.1)
+        (a.2.tree (linked (links a.1) follows)) (treed.df a.1 a.2 (a.2.tree (linked (links a.1) follows)) d.1 d.2).1)
+      (Tree.frame (own a.1) (a.2.tree (linked (links a.1) follows))) =
+      Tree.frame (own (Under.apply d.1 a.1)) ((run Seeds d.2 a.2).tree (linked (links (Under.apply d.1 a.1)) follows)) := by
+    rw [← h2]
+    exact h3
+  show ((d.1.1.ribbon, run (Fit.edits Span) _ _), (Under.apply d.1 a.1, _, _)) = _
+  have e1 : treed.dfWith (Under.apply d.1 a.1) a.1 a.2 (a.2.tree (linked (links a.1) follows)) d.1 d.2 =
+      treed.df a.1 a.2 (a.2.tree (linked (links a.1) follows)) d.1 d.2 := rfl
+  simp only [framed, e1, h1, h2, h3']
+  rfl
 
 /-- Its lines. -/
-def lines (path : Path) (hint : Hint) : Cached (prod Under (runs Writes)) Lines :=
-  compose (framed path hint) (compose (Fit.fit measure) (Cached.lift (cached Text.rows)))
+def lines : Cached (prod Under (runs Seeds)) Lines :=
+  compose framed (compose (Fit.fit measure) (Cached.lift (cached Text.rows)))
 
 /-- The lines' derivative is right: its edits take the lines to those of
-the value after its writes, under what it's drawn under after its edit. -/
-theorem lines_ok (path : Path) (hint : Hint) : (lines path hint).ok :=
-  compose_ok _ _ (framed_ok path hint)
-    (compose_ok _ _ (Fit.fit_ok measure) (Cached.lift_ok _ (cached_ok _ Text.rows_ok)))
+the seed after its edits, under what it's drawn under after its edit. -/
+theorem lines_ok : lines.ok :=
+  compose_ok _ _ framed_ok (compose_ok _ _ (Fit.fit_ok measure) (Cached.lift_ok _ (cached_ok _ Text.rows_ok)))
 
 end Progred.Derived

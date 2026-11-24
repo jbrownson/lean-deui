@@ -49,16 +49,21 @@ Read `README.md` first for what the repository is.
   to compare before and after a change. It says so if the layout or the
   scene the view keeps isn't what working it out again gives.
 - The view is incremental steps composed (`Progred/Editor.lean`), and
-  `view_ok` is their laws composed. A part's frames are grown from its
-  `Input` (`Progred/Display.lean`), which has to hold all they read: a
-  frame that read anything else would be kept when it shouldn't be.
-  Something new the drawing depends on goes into `Seen` and an `Item`'s
-  restriction of it, and `touched` then asks it of each part.
-- A frame is drawn from its value without what's inside its elements and
-  fields (`shallow`), and from the selection only when it's at the frame
-  or a step in (`seen`). That's what `Progred/Regrow.lean`'s laws rest on:
-  a form that needs to read further in is a kid with a `Hint`, and what a
-  frame reads of its whole value goes through `deepOf`.
+  `view_ok` is their laws composed. A part is drawn by
+  `Progred/Derived/`: its value as a tree that mirrors it, each node's
+  own doc, the layout, the rows.
+- A form (`Derived/Forms.lean`) draws a node from its label and what it's
+  given, and nothing else. It reads definitions only through `look`; a
+  cell it reads is one of the node's keys (`keys1`, `through`), or its
+  name won't be drawn. It reads the selection, results and errors only
+  through the node's `View`; something new a doc depends on goes into
+  `View`, `view` and `differs`. A value the node hasn't got is a hole the
+  node draws itself: the selection never changes the tree.
+- What hangs under a cell is the tree's to say (`Derived/Links.lean`),
+  and a form reads only whether something does. A node's label is its
+  value without what's inside (`shallow`); a node drawn from more has its
+  whole value (`reads`), and is given its label again by every write
+  beneath it.
 - A function whose result is used twice binds it once (`let made := …`).
   The compiler doesn't share a call repeated in two branches, and a
   recursive one repeated is exponential.
@@ -71,14 +76,6 @@ Read `README.md` first for what the repository is.
   change out of the state the app holds. A stage that needs to know what
   changed gets an edit that says so; it doesn't compare a value with what
   it was.
-- The view is being moved to `Progred/Derived/` (`docs/progred-port.md`
-  says how far). A form there draws a node from its label alone and
-  reads definitions only through `look`; a cell it reads is one of the
-  node's keys (`keys1`, `through`). What hangs under a cell is the
-  tree's to say (`Derived/Links.lean`), and a form reads only whether
-  something does. `progred_derived` with the example
-  files says which parts it draws as the view as it is does: that count
-  goes up, not down. With a number it times both.
 - `progred_measure` says what events cost; run it before and after a
   change to the view, on a notebook (`progred_measure 300`) and on the
   same entries as one part (`progred_measure 300 one`); with `structure`

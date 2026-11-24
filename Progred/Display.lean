@@ -1,4 +1,5 @@
 import Std.Data.TreeSet
+import Progred.Writes
 import Progred.Builtin
 import Progred.GidText
 import Progred.Layout
@@ -853,6 +854,19 @@ def notebookEntries? (root : Option Value) : Option (List (Position × Value)) :
     else none
   | none => none
 
+/-- An edit of a part: a new one, or its value written at a path within it. -/
+inductive Entry.Edit where
+  | replace (e : Entry)
+  | write (rel : List Step) (value : Option Value)
+
+def Entry.Edit.apply : Entry.Edit → Entry → Entry
+  | .replace e, _ => e
+  | .write rel w, .entry p v => .entry p (v.written rel w)
+  | .write rel w, .whole root => .whole (root.map fun v => v.written rel w)
+  | .write _ _, .end_ => .end_
+
+abbrev Entry.edits : Deui.EditStructure := ⟨Entry, Entry.Edit, Entry.Edit.apply⟩
+
 /-- The document's parts: the root notebook's entries and their end, or the
 whole root. -/
 def entries (root : Option Value) : List Entry :=
@@ -974,6 +988,9 @@ structure Seen where
   value. -/
   named : List (CellId × Value) := []
   ribbon : Nat := 80
+  /-- The paths of the values evaluations' errors are about, for the view
+  drawn by derivative, which a part is given them by. -/
+  failing : List Path := []
   deriving DecidableEq
 
 namespace Item
@@ -1068,17 +1085,18 @@ def touched (c c' : Seen) (i : Item) : Bool :=
 with as it was: then no part is touched, and none is asked. -/
 def still (c c' : Seen) : Bool :=
   c.ribbon == c'.ribbon && equal c.selection c'.selection && equal c.folds c'.folds &&
-    equal c.results c'.results && equal c.layouts c'.layouts && equal c.named c'.named
+    equal c.results c'.results && equal c.layouts c'.layouts && equal c.named c'.named &&
+    equal c.failing c'.failing
 
 /-- A change that's still leaves the state the parts are drawn with as it
 was. -/
 theorem eq_of_still (c c' : Seen) (h : still c c' = true) : c' = c := by
   simp only [still, Bool.and_eq_true, beq_iff_eq] at h
-  obtain ⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hn⟩ := h
+  obtain ⟨⟨⟨⟨⟨⟨hr, hs⟩, hf⟩, hres⟩, hl⟩, hn⟩, hfl⟩ := h
   cases c; cases c'
   simp only [Seen.mk.injEq]
   exact ⟨(equal_sound _ _ hs).symm, (equal_sound _ _ hf).symm, (equal_sound _ _ hres).symm,
-    (equal_sound _ _ hl).symm, (equal_sound _ _ hn).symm, hr.symm⟩
+    (equal_sound _ _ hl).symm, (equal_sound _ _ hn).symm, hr.symm, (equal_sound _ _ hfl).symm⟩
 
 theorem not_touched_of_still (c c' : Seen) (h : still c c' = true) (i : Item) : touched c c' i = false := by
   rw [eq_of_still c c' h]
